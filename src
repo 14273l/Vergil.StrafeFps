@@ -1,0 +1,869 @@
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/14273l/Vergil-poopy/refs/heads/main/Library"))()
+
+local Players           = game:GetService("Players")
+local RunService        = game:GetService("RunService")
+local UserInputService  = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace         = game:GetService("Workspace")
+local Lighting          = game:GetService("Lighting")
+
+local LocalPlayer = Players.LocalPlayer
+
+local Window = Library:Window({ Name = 'Vergil Reborn' })
+Window:Watermark({ Name = "Vergil Reborn" })
+Window:KeybindList({ Name = 'hotkeys' })
+
+local Combat  = Window:Page({ Name = "combat" })
+local Visuals = Window:Page({ Name = "visuals" })
+local Misc    = Window:Page({ Name = "misc" })
+
+----------------------------------------------------------------
+-- VIEWMODEL
+----------------------------------------------------------------
+local GunState  = { Enabled = true, Material = Enum.Material.Neon, Color = Color3.fromRGB(255,255,255) }
+local ArmsState = { Enabled = true, Hide = false, Material = Enum.Material.Neon, Color = Color3.fromRGB(255,255,255) }
+
+local camera = workspace.CurrentCamera
+
+local function getGroup(part, root)
+    local p = part
+    while p and p ~= root do
+        if p.Name == "Parts" then return "parts" end
+        if p.Name == "Arms"  then return "arms"  end
+        p = p.Parent
+    end
+    return nil
+end
+
+local Backups = {}
+
+local function backup(part)
+    local bk = Backups[part]
+    if bk then return bk end
+    bk = { Material = part.Material, Color = part.Color, TextureID = nil, SAs = {} }
+    Backups[part] = bk
+    if part:IsA("MeshPart") and part.TextureID ~= "" then bk.TextureID = part.TextureID end
+    for _, ch in ipairs(part:GetChildren()) do
+        if ch:IsA("SurfaceAppearance") then table.insert(bk.SAs, ch) end
+    end
+    return bk
+end
+
+local function applyStyle(part, material, color)
+    backup(part)
+    if part:IsA("MeshPart") and part.TextureID ~= "" then part.TextureID = "" end
+    for _, ch in ipairs(part:GetChildren()) do
+        if ch:IsA("SurfaceAppearance") then ch.Parent = nil end
+    end
+    for _, ch in ipairs(part:GetChildren()) do
+        if ch:IsA("Decal") or ch:IsA("Texture") then
+            if ch.Transparency < 1 then ch.Transparency = 1 end
+        end
+    end
+    if part.Material ~= material then part.Material = material end
+    if part.Color    ~= color    then part.Color    = color    end
+    if part.CanCollide then part.CanCollide = false end
+    if not part.Massless then part.Massless = true end
+    if part.CanQuery    then part.CanQuery = false end
+    if part.CastShadow  then part.CastShadow = false end
+end
+
+local function restorePart(part)
+    local bk = Backups[part]
+    if not bk then return end
+    if bk.TextureID and part:IsA("MeshPart") then part.TextureID = bk.TextureID end
+    for _, sa in ipairs(bk.SAs) do
+        if sa and not sa.Parent and part.Parent then sa.Parent = part end
+    end
+    if part.Material ~= bk.Material then part.Material = bk.Material end
+    if part.Color    ~= bk.Color    then part.Color    = bk.Color    end
+    Backups[part] = nil
+end
+
+local function restoreGroup(group)
+    local vm = camera:FindFirstChild("Viewmodel")
+    if not vm then return end
+    for _, obj in ipairs(vm:GetDescendants()) do
+        if obj:IsA("BasePart") and getGroup(obj, vm) == group then restorePart(obj) end
+    end
+end
+
+----------------------------------------------------------------
+-- SILENT AIM UTILITY
+----------------------------------------------------------------
+local utility = {
+    target        = nil,
+    SilentAim     = false,
+    VisibleCheck  = false,
+    FOV           = 120,
+    Players       = Players,
+    ReplicatedStorage = ReplicatedStorage,
+    Workspace     = Workspace,
+    RunService    = RunService,
+    UserInputService = UserInputService
+}
+
+function utility:isFriendlyCharacter(c)
+    local s, r = pcall(function()
+        if not c then return false end
+        if not self.GameState then return false end
+        local a = c:GetAttribute("BotUniqueId")
+        if a then return self.GameState.isTeammate(a) end
+        local p = self.Players:GetPlayerFromCharacter(c)
+        if p then return self.GameState.isTeammate(p.UserId) end
+        return false
+    end)
+    if s and r then return true end
+    return false
+end
+
+function utility:GetCamera()
+    local s, r = pcall(function() return self.Workspace.CurrentCamera end)
+    if s and r then return r end
+    return nil
+end
+
+function utility:GetCameraCFrame()
+    local s, r = pcall(function()
+        return self.Camera.CFrame or self:GetCamera().CFrame
+    end)
+    if s and r then return r end
+    return nil
+end
+
+function utility:CreateParams()
+    local s, r = pcall(function()
+        local c = self.LocalPlayer and self.LocalPlayer.Character
+        if not c then return nil end
+        local p = RaycastParams.new()
+        p.FilterType = Enum.RaycastFilterType.Exclude
+        p.FilterDescendantsInstances = {c}
+        p.IgnoreWater = true
+        return p
+    end)
+    if s and r then return r end
+    return nil
+end
+
+utility.ComputeeDirection = function(o, e)
+    local s, r = pcall(function() return (e - o) end)
+    if s and r then return r end
+    return nil
+end
+
+function utility:isVisible(t)
+    if not t.Parent then return false end
+    local o = self:GetCameraCFrame()
+    if not o then return false end
+    local p = self:CreateParams()
+    if not p then return false end
+    local d = self.ComputeeDirection(o.Position, t.Position)
+    if not d then return false end
+    local result = self.Workspace:Raycast(o.Position, d, p)
+    if result then
+        local c = result.Instance:FindFirstAncestorOfClass("Model")
+        if c then
+            if c:GetAttribute("BotUniqueId") then return true end
+            if self.Players:GetPlayerFromCharacter(c) then return true end
+        end
+    end
+    return false
+end
+
+function utility:getPlayers()
+    local s, r = pcall(function()
+        local c = {}
+        local hu = self.Workspace:QueryDescendants("Humanoid")
+        for _, h in hu do table.insert(c, h.Parent) end
+        return c
+    end)
+    if s and r then return r end
+    return {}
+end
+
+function utility:GetClosestPlayer()
+    if not self.SilentAim then return nil end
+
+    local closestDistance = math.huge
+    local closest = nil
+    local cam = self.Camera or self:GetCamera()
+    if not cam then return nil end
+
+    local mousePos = self.UserInputService:GetMouseLocation()
+    local fov = self.FOV or 120
+
+    for _, char in pairs(self:getPlayers()) do
+        if not char then continue end
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        local hum = char:FindFirstChild("Humanoid")
+        local head = char:FindFirstChild("Head")
+        if not hrp or not hum or not head or hum.Health <= 0 then continue end
+        if self:isFriendlyCharacter(char) then continue end
+
+        local screenPos, onScreen = cam:WorldToViewportPoint(hrp.Position)
+        if onScreen then
+            local distance = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+            if distance <= fov and distance < closestDistance then
+                if self.VisibleCheck and not self:isVisible(head) then continue end
+                closestDistance = distance
+                closest = head
+            end
+        end
+    end
+
+    return closest
+end
+
+function utility:hook()
+    self.fireHitscanShot = filtergc("function", {Name = "fireHitscanShot"}, true)
+    while not self.fireHitscanShot do
+        task.wait(0.5)
+        warn('failed to get fireHitscanShot enter arena or game might have updated')
+        self.fireHitscanShot = filtergc("function", {Name = "fireHitscanShot"}, true)
+    end
+
+    self.firehook = hookfunction(self.fireHitscanShot, function(...)
+        if self.target then
+            local oldcf = self.Camera.CFrame
+            self.Camera.CFrame = CFrame.lookAt(self.Camera.CFrame.Position, self.target.Position)
+            local result = self.firehook(...)
+            self.Camera.CFrame = oldcf
+            return result
+        end
+        return self.firehook(...)
+    end)
+
+    if not self.firehook then return warn("failed to hook") end
+    return warn("success hooking")
+end
+
+function utility:init()
+    self.LocalPlayer = self.Players.LocalPlayer
+    if not self.LocalPlayer then return warn("failed to get localplayer") end
+    if not hookfunction then return self.LocalPlayer:Kick("Unsupported executor missing hookfunction") end
+    if not filtergc    then return self.LocalPlayer:Kick("Unsupported executor missing filtergc") end
+
+    self.Classes = self.ReplicatedStorage:FindFirstChild("Classes")
+    if not self.Classes then return warn('failed to get Classes') end
+    self.UserInterface = self.Classes:FindFirstChild("UserInterface")
+    if not self.UserInterface then return warn('failed to get UserInterface') end
+    self.ReactApp = self.UserInterface:FindFirstChild("ReactApp")
+    if not self.ReactApp then return warn('failed to get ReactApp') end
+    local gs = self.ReactApp:FindFirstChild("GameState")
+    if not gs then return warn('failed to get GameState') end
+    self.GameState = require(gs)
+    if not self.GameState then return warn('failed to require GameState') end
+
+    self.Camera = self:GetCamera()
+    if not self.Camera then return warn("failed to get camera") end
+
+    self.GetTargetConn = self.RunService.RenderStepped:Connect(function()
+        self.target = self:GetClosestPlayer()
+    end)
+    if not self.GetTargetConn then return warn("failed to create runservice conn") end
+
+    self:hook()
+    return warn("success init")
+end
+
+----------------------------------------------------------------
+-- CHAMS
+----------------------------------------------------------------
+local ChamsState = {
+    Enabled       = false,
+    TeamCheck     = true,
+    IncludeNPCs   = true,
+    VisibleColor  = { Color3.fromRGB(155, 155, 255), 0.0 },
+    OccludedColor = { Color3.fromRGB(255, 255, 255), 0.8 },
+}
+
+local ChamsCache   = {}
+local IgnoreNames  = { HumanoidRootPart = true }
+
+local function createAdornment(part, isHead, vis)
+    local adorn = Instance.new("BoxHandleAdornment")
+    local offset_base      = (vis == 1) and -0.05 or 0.05
+    local head_size_offset = (vis == 1) and -0.2  or 0.2
+    if isHead then
+        adorn.Size = Vector3.new(1,1,1) + Vector3.new(head_size_offset, head_size_offset, head_size_offset)
+    else
+        adorn.Size = part.Size + Vector3.new(offset_base, offset_base, offset_base)
+    end
+    adorn.Adornee     = part
+    adorn.Parent      = part
+    adorn.ZIndex      = (vis == 1) and 2 or 1
+    adorn.AlwaysOnTop = (vis == 1)
+    adorn.Visible     = false
+    return adorn
+end
+
+local function isTeammateChar(char)
+    local ok, res = pcall(function() return utility:isFriendlyCharacter(char) end)
+    if ok then return res end
+    return false
+end
+
+local function shouldChams(char)
+    if not ChamsState.Enabled then return false end
+    if char == LocalPlayer.Character then return false end
+    if ChamsState.TeamCheck and isTeammateChar(char) then return false end
+    return true
+end
+
+local function applyToChar(char, isTarget)
+    for _, part in ipairs(char:GetChildren()) do
+        if part:IsA("BasePart") and not IgnoreNames[part.Name] then
+            local ad = ChamsCache[part]
+            if not ad then
+                local isHead = (part.Name == "Head")
+                ad = {
+                    createAdornment(part, isHead, 1),
+                    createAdornment(part, isHead, 2),
+                }
+                ChamsCache[part] = ad
+            end
+            ad[1].Visible      = isTarget
+            ad[2].Visible      = isTarget
+            if isTarget then
+                ad[1].Color3        = ChamsState.OccludedColor[1]
+                ad[1].Transparency  = ChamsState.OccludedColor[2]
+                ad[2].Color3        = ChamsState.VisibleColor[1]
+                ad[2].Transparency  = ChamsState.VisibleColor[2]
+            end
+        end
+    end
+end
+
+local function collectTracked()
+    local set = {}
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr.Character then set[plr.Character] = true end
+    end
+    if ChamsState.IncludeNPCs then
+        local ok, humans = pcall(function() return Workspace:QueryDescendants("Humanoid") end)
+        if ok and humans then
+            for _, h in ipairs(humans) do
+                local char = h.Parent
+                if char and not set[char] and char:FindFirstChild("Head")
+                   and not Players:GetPlayerFromCharacter(char) then
+                    set[char] = true
+                end
+            end
+        else
+            local function checkModel(m)
+                if m:IsA("Model") and not set[m]
+                   and m:FindFirstChildOfClass("Humanoid")
+                   and m:FindFirstChild("Head")
+                   and not Players:GetPlayerFromCharacter(m) then
+                    set[m] = true
+                end
+            end
+            for _, obj in ipairs(Workspace:GetChildren()) do
+                checkModel(obj)
+                if obj:IsA("Folder") then
+                    for _, child in ipairs(obj:GetChildren()) do checkModel(child) end
+                end
+            end
+        end
+    end
+    return set
+end
+
+local lastChamsScan = 0
+local trackedChars  = {}
+
+RunService.RenderStepped:Connect(function()
+    local now = tick()
+    if now - lastChamsScan > 0.5 then
+        lastChamsScan = now
+        trackedChars  = collectTracked()
+    end
+
+    for _, ad in pairs(ChamsCache) do
+        ad[1].Visible = false
+        ad[2].Visible = false
+    end
+
+    if ChamsState.Enabled then
+        for char in pairs(trackedChars) do
+            if char.Parent then
+                applyToChar(char, shouldChams(char))
+            end
+        end
+    end
+
+    for part, ad in pairs(ChamsCache) do
+        if not part.Parent then
+            ad[1]:Destroy()
+            ad[2]:Destroy()
+            ChamsCache[part] = nil
+        end
+    end
+end)
+
+----------------------------------------------------------------
+-- WORLD VISUALS — lighting + atmosphere
+----------------------------------------------------------------
+local LightingBackup = {
+    Ambient        = Lighting.Ambient,
+    OutdoorAmbient = Lighting.OutdoorAmbient,
+    Brightness     = Lighting.Brightness,
+    ClockTime      = Lighting.ClockTime,
+    FogEnd         = Lighting.FogEnd,
+    FogStart       = Lighting.FogStart,
+    FogColor       = Lighting.FogColor,
+}
+
+local LightState = {
+    Enabled        = false,
+    Ambient        = Color3.fromRGB(255, 255, 255),
+    OutdoorAmbient = Color3.fromRGB(255, 255, 255),
+    Brightness     = 2,
+    ClockTime      = 14,
+    FogEnd         = 100000,
+    FogStart       = 0,
+}
+
+local function getAtmosphere()
+    local atm = Lighting:FindFirstChildOfClass("Atmosphere")
+        or Workspace:FindFirstChildOfClass("Atmosphere")
+    if not atm then
+        atm = Instance.new("Atmosphere")
+        atm.Parent = Lighting
+    end
+    return atm
+end
+
+local AtmState = {
+    Enabled = false,
+    Density = 0.3,
+    Haze    = 0,
+    Glare   = 0,
+    Color   = Color3.fromRGB(199, 199, 199),
+    Decay   = Color3.fromRGB(106, 112, 125),
+    Offset  = 0,
+}
+
+local AtmBackup = nil
+local function snapshotAtmosphere()
+    local atm = getAtmosphere()
+    AtmBackup = {
+        Density = atm.Density,
+        Haze    = atm.Haze,
+        Glare   = atm.Glare,
+        Color   = atm.Color,
+        Decay   = atm.Decay,
+        Offset  = atm.Offset,
+    }
+end
+snapshotAtmosphere()
+
+local function applyLighting()
+    if not LightState.Enabled then return end
+    Lighting.Ambient        = LightState.Ambient
+    Lighting.OutdoorAmbient = LightState.OutdoorAmbient
+    Lighting.Brightness     = LightState.Brightness
+    Lighting.ClockTime      = LightState.ClockTime
+    Lighting.FogEnd         = LightState.FogEnd
+    Lighting.FogStart       = LightState.FogStart
+end
+
+local function restoreLighting()
+    Lighting.Ambient        = LightingBackup.Ambient
+    Lighting.OutdoorAmbient = LightingBackup.OutdoorAmbient
+    Lighting.Brightness     = LightingBackup.Brightness
+    Lighting.ClockTime      = LightingBackup.ClockTime
+    Lighting.FogEnd         = LightingBackup.FogEnd
+    Lighting.FogStart       = LightingBackup.FogStart
+    Lighting.FogColor       = LightingBackup.FogColor
+end
+
+local function applyAtmosphere()
+    if not AtmState.Enabled then return end
+    local atm = getAtmosphere()
+    atm.Density = AtmState.Density
+    atm.Haze    = AtmState.Haze
+    atm.Glare   = AtmState.Glare
+    atm.Color   = AtmState.Color
+    atm.Decay   = AtmState.Decay
+    atm.Offset  = AtmState.Offset
+end
+
+local function restoreAtmosphere()
+    if not AtmBackup then return end
+    local atm = getAtmosphere()
+    atm.Density = AtmBackup.Density
+    atm.Haze    = AtmBackup.Haze
+    atm.Glare   = AtmBackup.Glare
+    atm.Color   = AtmBackup.Color
+    atm.Decay   = AtmBackup.Decay
+    atm.Offset  = AtmBackup.Offset
+end
+
+RunService.RenderStepped:Connect(function()
+    if LightState.Enabled then applyLighting() end
+    if AtmState.Enabled   then applyAtmosphere() end
+end)
+
+----------------------------------------------------------------
+-- FOV LOCK
+----------------------------------------------------------------
+local FOVState = {
+    Enabled  = false,
+    Value    = 120,
+    Original = camera.FieldOfView,
+}
+
+local function enforceFOV()
+    if not FOVState.Enabled then return end
+    local cam = workspace.CurrentCamera
+    if cam and cam.FieldOfView ~= FOVState.Value then
+        cam.FieldOfView = FOVState.Value
+    end
+end
+
+RunService.RenderStepped:Connect(enforceFOV)
+
+camera:GetPropertyChangedSignal("FieldOfView"):Connect(function()
+    if FOVState.Enabled and camera.FieldOfView ~= FOVState.Value then
+        camera.FieldOfView = FOVState.Value
+    end
+end)
+
+----------------------------------------------------------------
+-- SILENT AIM UI
+----------------------------------------------------------------
+local aimColor = Color3.fromRGB(255, 255, 255)
+
+local AimSection = Combat:Section({ Name = "silent aim", Side = 1 })
+
+AimSection:Toggle({
+    Name = "enabled", Flag = "aim_enabled", Default = false,
+    Callback = function(v)
+        utility.SilentAim = v
+        if not v then utility.target = nil end
+    end
+})
+
+AimSection:Toggle({
+    Name = "visible check", Flag = "aim_vischeck", Default = false,
+    Callback = function(v) utility.VisibleCheck = v end
+})
+
+AimSection:Slider({
+    Name = "fov", Flag = "aim_fov",
+    Min = 10, Max = 800, Default = 120,
+    Decimals = 1,
+    Callback = function(v) utility.FOV = v end
+})
+
+AimSection:Label({ Name = "fov color" }):Colorpicker({
+    Name = "aim_color", Flag = "aim_color",
+    Default = Color3.fromRGB(255, 255, 255),
+    Callback = function(c) aimColor = c end
+})
+
+----------------------------------------------------------------
+-- FOV CIRCLE
+----------------------------------------------------------------
+local guiParent = (gethui and gethui()) or game:GetService("CoreGui")
+
+local fovGui = Instance.new("ScreenGui")
+fovGui.Name = "VergilFOV"
+fovGui.IgnoreGuiInset = true
+fovGui.ResetOnSpawn = false
+fovGui.DisplayOrder = 9999
+fovGui.Parent = guiParent
+
+local fovFrame = Instance.new("Frame")
+fovFrame.Name = "FOV"
+fovFrame.BackgroundTransparency = 1
+fovFrame.BorderSizePixel = 0
+fovFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+fovFrame.Visible = false
+fovFrame.Parent = fovGui
+
+local fovCorner = Instance.new("UICorner")
+fovCorner.CornerRadius = UDim.new(1, 0)
+fovCorner.Parent = fovFrame
+
+local fovStroke = Instance.new("UIStroke")
+fovStroke.Color = aimColor
+fovStroke.Thickness = 1
+fovStroke.Transparency = 0.15
+fovStroke.Parent = fovFrame
+
+RunService.RenderStepped:Connect(function()
+    if not utility.SilentAim then
+        if fovFrame.Visible then fovFrame.Visible = false end
+        return
+    end
+    local mouse = UserInputService:GetMouseLocation()
+    local r = utility.FOV or 120
+    fovFrame.Visible  = true
+    fovFrame.Size     = UDim2.fromOffset(r * 2, r * 2)
+    fovFrame.Position = UDim2.fromOffset(mouse.X, mouse.Y)
+    fovStroke.Color   = aimColor
+end)
+
+----------------------------------------------------------------
+-- CHAMS UI
+----------------------------------------------------------------
+local ChamsSection = Visuals:Section({ Name = "chams", Side = 1 })
+
+ChamsSection:Toggle({
+    Name = "enabled", Flag = "chams_enabled", Default = false,
+    Callback = function(v) ChamsState.Enabled = v end
+})
+
+ChamsSection:Toggle({
+    Name = "team check", Flag = "chams_team", Default = true,
+    Callback = function(v) ChamsState.TeamCheck = v end
+})
+
+ChamsSection:Toggle({
+    Name = "include npcs", Flag = "chams_npcs", Default = true,
+    Callback = function(v) ChamsState.IncludeNPCs = v end
+})
+
+ChamsSection:Label({ Name = "visible color" }):Colorpicker({
+    Name = "chams_vis", Flag = "chams_vis",
+    Default = Color3.fromRGB(155, 155, 255),
+    Callback = function(c) ChamsState.VisibleColor[1] = c end
+})
+
+ChamsSection:Label({ Name = "occluded color" }):Colorpicker({
+    Name = "chams_occ", Flag = "chams_occ",
+    Default = Color3.fromRGB(255, 255, 255),
+    Callback = function(c) ChamsState.OccludedColor[1] = c end
+})
+
+ChamsSection:Slider({
+    Name = "visible transparency", Flag = "chams_vis_t",
+    Min = 0, Max = 1, Default = 0,
+    Decimals = 0.01,
+    Callback = function(v) ChamsState.VisibleColor[2] = v end
+})
+
+ChamsSection:Slider({
+    Name = "occluded transparency", Flag = "chams_occ_t",
+    Min = 0, Max = 1, Default = 0.8,
+    Decimals = 0.01,
+    Callback = function(v) ChamsState.OccludedColor[2] = v end
+})
+
+----------------------------------------------------------------
+-- LIGHTING UI
+----------------------------------------------------------------
+local LightSection = Visuals:Section({ Name = "lighting", Side = 2 })
+
+LightSection:Toggle({
+    Name = "enabled", Flag = "light_enabled", Default = false,
+    Callback = function(v)
+        LightState.Enabled = v
+        if v then applyLighting() else restoreLighting() end
+    end
+})
+
+LightSection:Label({ Name = "ambient" }):Colorpicker({
+    Name = "light_ambient", Flag = "light_ambient",
+    Default = Color3.fromRGB(255, 255, 255),
+    Callback = function(c) LightState.Ambient = c end
+})
+
+LightSection:Label({ Name = "outdoor ambient" }):Colorpicker({
+    Name = "light_outdoor", Flag = "light_outdoor",
+    Default = Color3.fromRGB(255, 255, 255),
+    Callback = function(c) LightState.OutdoorAmbient = c end
+})
+
+LightSection:Slider({
+    Name = "brightness", Flag = "light_bright",
+    Min = 0, Max = 5, Default = 2,
+    Decimals = 0.01,
+    Callback = function(v) LightState.Brightness = v end
+})
+
+LightSection:Slider({
+    Name = "clock time", Flag = "light_clock",
+    Min = 0, Max = 24, Default = 14,
+    Decimals = 0.1,
+    Callback = function(v) LightState.ClockTime = v end
+})
+
+LightSection:Slider({
+    Name = "fog end", Flag = "light_fogend",
+    Min = 0, Max = 5000, Default = 100000,
+    Decimals = 1,
+    Callback = function(v) LightState.FogEnd = v end
+})
+
+LightSection:Slider({
+    Name = "fog start", Flag = "light_fogstart",
+    Min = 0, Max = 5000, Default = 0,
+    Decimals = 1,
+    Callback = function(v) LightState.FogStart = v end
+})
+
+----------------------------------------------------------------
+-- ATMOSPHERE UI
+----------------------------------------------------------------
+local AtmSection = Visuals:Section({ Name = "atmosphere", Side = 2 })
+
+AtmSection:Toggle({
+    Name = "enabled", Flag = "atm_enabled", Default = false,
+    Callback = function(v)
+        AtmState.Enabled = v
+        if v then applyAtmosphere() else restoreAtmosphere() end
+    end
+})
+
+AtmSection:Slider({
+    Name = "density", Flag = "atm_density",
+    Min = 0, Max = 1, Default = 0.3,
+    Decimals = 0.01,
+    Callback = function(v) AtmState.Density = v end
+})
+
+AtmSection:Slider({
+    Name = "haze", Flag = "atm_haze",
+    Min = 0, Max = 10, Default = 0,
+    Decimals = 0.01,
+    Callback = function(v) AtmState.Haze = v end
+})
+
+AtmSection:Slider({
+    Name = "glare", Flag = "atm_glare",
+    Min = 0, Max = 10, Default = 0,
+    Decimals = 0.01,
+    Callback = function(v) AtmState.Glare = v end
+})
+
+AtmSection:Slider({
+    Name = "offset", Flag = "atm_offset",
+    Min = -10, Max = 10, Default = 0,
+    Decimals = 0.01,
+    Callback = function(v) AtmState.Offset = v end
+})
+
+AtmSection:Label({ Name = "color" }):Colorpicker({
+    Name = "atm_color", Flag = "atm_color",
+    Default = Color3.fromRGB(199, 199, 199),
+    Callback = function(c) AtmState.Color = c end
+})
+
+AtmSection:Label({ Name = "decay" }):Colorpicker({
+    Name = "atm_decay", Flag = "atm_decay",
+    Default = Color3.fromRGB(106, 112, 125),
+    Callback = function(c) AtmState.Decay = c end
+})
+
+----------------------------------------------------------------
+-- CAMERA / FOV UI  (misc side 1)
+----------------------------------------------------------------
+local CameraSection = Misc:Section({ Name = "camera", Side = 1 })
+
+CameraSection:Toggle({
+    Name = "fov lock", Flag = "fov_enabled", Default = false,
+    Callback = function(v)
+        FOVState.Enabled = v
+        if v then
+            enforceFOV()
+        else
+            local cam = workspace.CurrentCamera
+            if cam then cam.FieldOfView = FOVState.Original end
+        end
+    end
+})
+
+CameraSection:Slider({
+    Name = "fov", Flag = "fov_value",
+    Min = 70, Max = 200, Default = 120,
+    Decimals = 0.1,
+    Callback = function(v)
+        FOVState.Value = v
+        enforceFOV()
+    end
+})
+
+----------------------------------------------------------------
+-- GUN / ARMS
+----------------------------------------------------------------
+local GunSection = Misc:Section({ Name = "gun model changer", Side = 1 })
+
+GunSection:Toggle({ Name = "enabled", Flag = "gun_changer", Default = true,
+    Callback = function(v)
+        GunState.Enabled = v
+        if not v then restoreGroup("parts") end
+    end })
+
+GunSection:Dropdown({ Name = "material", Flag = "gun_material",
+    Items = { "Neon", "ForceField" }, Default = "Neon",
+    Callback = function(v) GunState.Material = Enum.Material[v] or Enum.Material.Neon end })
+
+GunSection:Label({ Name = "color" }):Colorpicker({
+    Name = "gun_color", Flag = "gun_color",
+    Default = Color3.fromRGB(255,255,255),
+    Callback = function(c) GunState.Color = c end })
+
+local ArmsSection = Misc:Section({ Name = "arms", Side = 2 })
+
+ArmsSection:Toggle({ Name = "hide arms", Flag = "hide_arms", Default = false,
+    Callback = function(v)
+        ArmsState.Hide = v
+        if not v then
+            local vm = camera:FindFirstChild("Viewmodel")
+            if vm then
+                for _, obj in ipairs(vm:GetDescendants()) do
+                    if obj:IsA("BasePart") and getGroup(obj, vm) == "arms" then
+                        if obj.Transparency >= 1 then obj.Transparency = 0 end
+                        if obj.LocalTransparencyModifier >= 1 then obj.LocalTransparencyModifier = 0 end
+                    end
+                end
+            end
+        end
+    end })
+
+ArmsSection:Toggle({ Name = "arms model changer", Flag = "arms_changer", Default = true,
+    Callback = function(v)
+        ArmsState.Enabled = v
+        if not v then restoreGroup("arms") end
+    end })
+
+ArmsSection:Dropdown({ Name = "arms material", Flag = "arms_material",
+    Items = { "Neon", "ForceField" }, Default = "Neon",
+    Callback = function(v) ArmsState.Material = Enum.Material[v] or Enum.Material.Neon end })
+
+ArmsSection:Label({ Name = "arms color" }):Colorpicker({
+    Name = "arms_color", Flag = "arms_color",
+    Default = Color3.fromRGB(255,255,255),
+    Callback = function(c) ArmsState.Color = c end })
+
+----------------------------------------------------------------
+-- FINALIZE
+----------------------------------------------------------------
+Window:InitWindow()
+
+task.spawn(function() utility:init() end)
+
+RunService:BindToRenderStep("VergilViewmodel", Enum.RenderPriority.Last.Value, function()
+    local vm = camera:FindFirstChild("Viewmodel")
+    if not vm then return end
+    for _, obj in ipairs(vm:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            local group = getGroup(obj, vm)
+            if group == "arms" then
+                if ArmsState.Hide then
+                    if obj.Transparency < 1 then obj.Transparency = 1 end
+                    if obj.LocalTransparencyModifier < 1 then obj.LocalTransparencyModifier = 1 end
+                elseif ArmsState.Enabled then
+                    applyStyle(obj, ArmsState.Material, ArmsState.Color)
+                end
+            elseif group == "parts" then
+                if GunState.Enabled then
+                    applyStyle(obj, GunState.Material, GunState.Color)
+                end
+            end
+        end
+    end
+end)
