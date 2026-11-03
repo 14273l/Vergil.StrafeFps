@@ -1,4 +1,3 @@
--- Vergil Reborn: managed lifecycle, diagnostics, and visual studio.
 local Environment = type(getgenv) == "function" and getgenv() or _G
 if type(Environment.VergilCleanup) == "function" then
     pcall(Environment.VergilCleanup)
@@ -22,7 +21,6 @@ local UserInputService  = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace         = game:GetService("Workspace")
 local Lighting          = game:GetService("Lighting")
-local HttpService       = game:GetService("HttpService")
 
 local LocalPlayer = Players.LocalPlayer
 assert(LocalPlayer, "[Vergil] Run this script in a Roblox client after joining a game")
@@ -31,7 +29,7 @@ local cleanup
 local Runtime: any = {
     Unloaded = false, Focused = true, Paused = false,
     Connections = {}, Threads = {}, Bindings = {}, Cleaners = {}, Errors = {},
-    ScanInterval = 0.5, VisualInterval = 1 / 60,
+    ScanInterval = 0.5,
     Started = os.clock(), LibraryExit = Library.Exit,
 }
 
@@ -189,37 +187,67 @@ local ArmHideBackups = setmetatable({}, { __mode = "k" })
 local function backup(part)
     local bk = Backups[part]
     if bk then return bk end
+
     bk = {
-        Material = part.Material, Color = part.Color, TextureID = nil,
-        SAs = {}, Decals = {}, CanCollide = part.CanCollide, Massless = part.Massless,
-        CanQuery = part.CanQuery, CastShadow = part.CastShadow,
+        Material   = part.Material,
+        Color      = part.Color,
+        TextureID  = nil,
+        SAs        = {},
+        Decals     = {},
+        CanCollide = part.CanCollide,
+        Massless   = part.Massless,
+        CanQuery   = part.CanQuery,
+        CastShadow = part.CastShadow,
     }
     Backups[part] = bk
-    if part:IsA("MeshPart") and part.TextureID ~= "" then bk.TextureID = part.TextureID end
-    for _, ch in ipairs(part:GetChildren()) do
-        if ch:IsA("SurfaceAppearance") then table.insert(bk.SAs, ch)
-        elseif ch:IsA("Decal") or ch:IsA("Texture") then table.insert(bk.Decals, { Obj = ch, Transparency = ch.Transparency }) end
+
+    if part:IsA("MeshPart") and part.TextureID ~= "" then
+        bk.TextureID = part.TextureID
     end
+
+    for _, ch in ipairs(part:GetChildren()) do
+        if ch:IsA("SurfaceAppearance") then
+            table.insert(bk.SAs, ch)
+        elseif ch:IsA("Decal") or ch:IsA("Texture") then
+            table.insert(bk.Decals, { Obj = ch, Transparency = ch.Transparency })
+        end
+    end
+
     return bk
 end
 
 local function applyStyle(part, material, color)
     local bk = backup(part)
-    if part:IsA("MeshPart") and part.TextureID ~= "" then part.TextureID = "" end
+
+    if part:IsA("MeshPart") and part.TextureID ~= "" then
+        part.TextureID = ""
+    end
+
     for _, ch in ipairs(part:GetChildren()) do
         if ch:IsA("SurfaceAppearance") then
-            if not table.find(bk.SAs, ch) then table.insert(bk.SAs, ch) end
+            if not table.find(bk.SAs, ch) then
+                table.insert(bk.SAs, ch)
+            end
             ch.Parent = nil
         end
     end
+
     for _, ch in ipairs(part:GetChildren()) do
         if (ch:IsA("Decal") or ch:IsA("Texture")) and ch.Transparency < 1 then
             local known = false
-            for _, d in ipairs(bk.Decals) do if d.Obj == ch then known = true; break end end
-            if not known then table.insert(bk.Decals, { Obj = ch, Transparency = ch.Transparency }) end
+            for _, d in ipairs(bk.Decals) do
+                if d.Obj == ch then
+                    known = true
+                    break
+                end
+            end
+            if not known then
+                table.insert(bk.Decals, { Obj = ch, Transparency = ch.Transparency })
+            end
             ch.Transparency = 1
         end
     end
+
     if part.Material ~= material then part.Material = material end
     if part.Color ~= color then part.Color = color end
     if part.CanCollide then part.CanCollide = false end
@@ -231,15 +259,30 @@ end
 local function restorePart(part)
     local bk = Backups[part]
     if not bk then return end
-    if bk.TextureID and part:IsA("MeshPart") then part.TextureID = bk.TextureID end
-    for _, sa in ipairs(bk.SAs) do if sa and not sa.Parent and part.Parent then sa.Parent = part end end
-    for _, d in ipairs(bk.Decals) do if d.Obj then d.Obj.Transparency = d.Transparency end end
+
+    if bk.TextureID and part:IsA("MeshPart") then
+        part.TextureID = bk.TextureID
+    end
+
+    for _, sa in ipairs(bk.SAs) do
+        if sa and not sa.Parent and part.Parent then
+            sa.Parent = part
+        end
+    end
+
+    for _, d in ipairs(bk.Decals) do
+        if d.Obj then
+            d.Obj.Transparency = d.Transparency
+        end
+    end
+
     if part.Material ~= bk.Material then part.Material = bk.Material end
     if part.Color ~= bk.Color then part.Color = bk.Color end
     if part.CanCollide ~= bk.CanCollide then part.CanCollide = bk.CanCollide end
     if part.Massless ~= bk.Massless then part.Massless = bk.Massless end
     if part.CanQuery ~= bk.CanQuery then part.CanQuery = bk.CanQuery end
     if part.CastShadow ~= bk.CastShadow then part.CastShadow = bk.CastShadow end
+
     Backups[part] = nil
 end
 
@@ -247,8 +290,11 @@ local function restoreGroup(group)
     local cam = getCamera()
     local vm = cam and cam:FindFirstChild("Viewmodel")
     if not vm then return end
+
     for _, obj in ipairs(vm:GetDescendants()) do
-        if obj:IsA("BasePart") and getGroup(obj, vm) == group then restorePart(obj) end
+        if obj:IsA("BasePart") and getGroup(obj, vm) == group then
+            restorePart(obj)
+        end
     end
 end
 
@@ -256,9 +302,16 @@ end
 -- SILENT AIM UTILITY
 ----------------------------------------------------------------
 local utility: any = {
-    target = nil, SilentAim = false, VisibleCheck = false, FOV = 120, ShowCircle = true,
-    Players = Players, ReplicatedStorage = ReplicatedStorage, Workspace = Workspace,
-    RunService = RunService, UserInputService = UserInputService,
+    target        = nil,
+    SilentAim     = false,
+    VisibleCheck  = false,
+    FOV           = 120,
+    ShowCircle    = true,
+    Players       = Players,
+    ReplicatedStorage = ReplicatedStorage,
+    Workspace     = Workspace,
+    RunService    = RunService,
+    UserInputService = UserInputService,
 }
 
 function utility:isFriendlyCharacter(c)
@@ -283,6 +336,7 @@ end
 function utility:CreateParams()
     local char = self.LocalPlayer and self.LocalPlayer.Character
     if not char then return nil end
+
     local ignore = { char }
     local cam = self:GetCamera()
     if cam then table.insert(ignore, cam) end
@@ -290,6 +344,7 @@ function utility:CreateParams()
         local folder = self.Workspace:FindFirstChild(name)
         if folder then table.insert(ignore, folder) end
     end
+
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = ignore
@@ -299,17 +354,23 @@ end
 
 function utility:isVisible(t)
     if not t or not t.Parent then return false end
+
     local cam = self:GetCamera()
     if not cam then return false end
+
     local params = self:CreateParams()
     if not params then return false end
+
     local origin = cam.CFrame.Position
     local direction = t.Position - origin
     if direction.Magnitude <= 1e-4 then return true end
+
     local result = self.Workspace:Raycast(origin, direction, params)
     if not result then return true end
+
     local char = t.Parent
     if not char then return false end
+
     return result.Instance == t or result.Instance:IsDescendantOf(char)
 end
 
@@ -317,9 +378,13 @@ local cachedPlayers, lastPlayersScan = {}, -1e9
 
 function utility:getPlayers()
     local now = os.clock()
-    if now - lastPlayersScan < Runtime.ScanInterval then return cachedPlayers end
+    if now - lastPlayersScan < Runtime.ScanInterval then
+        return cachedPlayers
+    end
     lastPlayersScan = now
+
     local list, seen = {}, {}
+
     local function add(char)
         local cam = self:GetCamera()
         if char and char:IsA("Model") and char.Parent and not seen[char]
@@ -328,15 +393,21 @@ function utility:getPlayers()
             table.insert(list, char)
         end
     end
+
     for _, player in ipairs(self.Players:GetPlayers()) do add(player.Character) end
+
     local ok = pcall(function()
-        for _, h in ipairs(self.Workspace:QueryDescendants("Humanoid")) do add(h.Parent) end
+        for _, h in ipairs(self.Workspace:QueryDescendants("Humanoid")) do
+            add(h.Parent)
+        end
     end)
+
     if not ok then
         for _, obj in ipairs(self.Workspace:GetDescendants()) do
             if obj:IsA("Humanoid") then add(obj.Parent) end
         end
     end
+
     cachedPlayers = list
     return list
 end
@@ -357,12 +428,15 @@ local function findHitscanFunction(scanGc)
     end
     if type(filtergc) == "function" then
         local ok, res = pcall(filtergc, "function", { Name = "fireHitscanShot" }, true)
-        if not ok then ok, res = pcall(filtergc, "function", { Name = "fireHitscanShot" }) end
+        if not ok then
+            ok, res = pcall(filtergc, "function", { Name = "fireHitscanShot" })
+        end
         if ok and res then
             if type(res) == "table" then res = res[1] end
             if type(res) == "function" then return res end
         end
     end
+
     if scanGc and type(getgc) == "function" then
         local okGc, gc = pcall(getgc, true)
         if not okGc then okGc, gc = pcall(getgc) end
@@ -373,24 +447,30 @@ local function findHitscanFunction(scanGc)
                     if type(debug) == "table" and type(debug.info) == "function" then
                         okInfo, name = pcall(function() return debug.info(obj, "n") end)
                     end
-                    if okInfo and type(name) == "string" and name:find("fireHitscanShot", 1, true) then return obj end
+                    if okInfo and type(name) == "string" and name:find("fireHitscanShot", 1, true) then
+                        return obj
+                    end
                 end
             end
         end
     end
+
     return nil
 end
 
 function utility:hook()
     if self.hooked or self.hooking or Runtime.Unloaded then return end
     self.hooking = true
+
     local warned = false
     local attempt = 0
+
     while not Runtime.Unloaded and not self.fireHitscanShot do
-        if self.SilentAim then
+        if self.SilentAim or self.AutoAimEnabled then
             attempt = attempt + 1
             self.fireHitscanShot = findHitscanFunction(attempt == 1 or attempt % 5 == 0)
             if self.fireHitscanShot then break end
+
             if not warned then
                 warn("[Vergil] waiting for fireHitscanShot (enter a match/arena)")
                 warned = true
@@ -399,6 +479,7 @@ function utility:hook()
         task.wait(2)
     end
     if Runtime.Unloaded then self.hooking = false; return end
+
     if type(isfunctionhooked) == "function" then
         local checked, hooked = pcall(isfunctionhooked, self.fireHitscanShot)
         if checked then self.wasHooked = hooked end
@@ -412,33 +493,50 @@ function utility:hook()
         local result = hookfunction(self.fireHitscanShot, function(...)
             assert(type(original) == "function", "[Vergil] missing original hitscan function")
             if not Runtime.Unloaded then self.ShotsIntercepted = (self.ShotsIntercepted or 0) + 1 end
-            local target = self.target
+            local target = self.AutoTarget or self.target
             local cam = self:GetCamera()
             local hum = target and target.Parent and target.Parent:FindFirstChildOfClass("Humanoid")
-            if self.SilentAim and combatActive() and hum and hum.Health > 0 and cam and self:RollHitChance() then
+            if self.AutoAimEnabled and self.AutoController == select(1, ...) and
+                (not combatActive() or not hum or hum.Health <= 0 or not cam
+                    or self:isFriendlyCharacter(target.Parent) or not self:isVisible(target)) then
+                return
+            end
+
+            if (self.SilentAim or self.AutoAimEnabled) and combatActive() and hum and hum.Health > 0 and cam
+                and not self:isFriendlyCharacter(target.Parent)
+                and (not self.AutoTarget or self:isVisible(target)) and self:RollHitChance() then
                 local old = cam.CFrame
                 local direction = target.Position - old.Position
                 if direction.Magnitude > 1e-4 then
                     cam.CFrame = CFrame.lookAt(old.Position, target.Position)
                     local results = table.pack(pcall(original, ...))
                     cam.CFrame = old
-                    if not results[1] then error(results[2], 0) end
+                    if not results[1] then
+                        error(results[2], 0)
+                    end
                     self.ShotsRedirected = (self.ShotsRedirected or 0) + 1
                     return table.unpack(results, 2, results.n)
                 end
             end
+
             return original(...)
         end)
         if type(result) == "function" then original = result end
     end)
     self.hooking = false
-    if not ok then warn("[Vergil] failed to hook fireHitscanShot: " .. tostring(err)); return end
+
+    if not ok then
+        warn("[Vergil] failed to hook fireHitscanShot: " .. tostring(err))
+        return
+    end
+
     if type(original) ~= "function" then
         if type(restorefunction) == "function" then pcall(restorefunction, self.fireHitscanShot) end
         self.SilentAim = false
         warn("[Vergil] hookfunction returned no original; silent aim disabled")
         return
     end
+
     self.firehook = original
     self.hooked = true
     warn("[Vergil] silent aim hook installed")
@@ -446,54 +544,71 @@ end
 
 function utility:init()
     if self.initialized or Runtime.Unloaded then return end
+
     self.LocalPlayer = self.Players.LocalPlayer
-    if not self.LocalPlayer then return warn("[Vergil] failed to get LocalPlayer") end
+    if not self.LocalPlayer then
+        return warn("[Vergil] failed to get LocalPlayer")
+    end
+
     self.initialized = true
+
     local classes = self.ReplicatedStorage:FindFirstChild("Classes")
     local ui = classes and classes:FindFirstChild("UserInterface")
     local react = ui and ui:FindFirstChild("ReactApp")
     local gs = react and react:FindFirstChild("GameState")
+
     if gs then
         local ok, result = pcall(require, gs)
-        if ok then self.GameState = result
-        else warn("[Vergil] failed to require GameState; team checks disabled") end
+        if ok then
+            self.GameState = result
+        else
+            warn("[Vergil] failed to require GameState; team checks disabled")
+        end
     else
         warn("[Vergil] failed to get GameState; team checks disabled")
     end
+
     self.Camera = self:GetCamera()
-    if not self.Camera then warn("[Vergil] failed to get camera") end
+    if not self.Camera then
+        warn("[Vergil] failed to get camera")
+    end
+
     if type(hookfunction) ~= "function" then
         warn("[Vergil] executor missing hookfunction; silent aim disabled")
         return
     end
-    if type(filtergc) ~= "function" and type(getgc) ~= "function" then
-        warn("[Vergil] executor missing filtergc/getgc; silent aim disabled")
-        return
-    end
-    Runtime:Spawn("silent aim hook", function() self:hook() end)
+    Runtime:Spawn("silent aim hook", function()
+        self:hook()
+    end)
+
+    return
 end
 
 ----------------------------------------------------------------
 -- CHAMS
 ----------------------------------------------------------------
 local ChamsState = {
-    Enabled = false, TeamCheck = true, IncludeNPCs = true,
-    VisibleColor = { Color3.fromRGB(155, 155, 255), 0.0 },
+    Enabled       = false,
+    TeamCheck     = true,
+    IncludeNPCs   = true,
+    VisibleColor  = { Color3.fromRGB(155, 155, 255), 0.0 },
     OccludedColor = { Color3.fromRGB(255, 255, 255), 0.8 },
 }
-local ChamsCache = {}
-local IgnoreNames = { HumanoidRootPart = true }
+
+local ChamsCache   = {}
+local IgnoreNames  = { HumanoidRootPart = true }
 
 local function createAdornment(part, vis)
     local adorn = Instance.new("BoxHandleAdornment")
     local offset = (vis == 1) and -0.05 or 0.05
     local size = part.Size + Vector3.new(offset, offset, offset)
-    adorn.Size = Vector3.new(math.max(size.X, 0.01), math.max(size.Y, 0.01), math.max(size.Z, 0.01))
-    adorn.Adornee = part
-    adorn.Parent = part
-    adorn.ZIndex = (vis == 1) and 2 or 1
+    adorn.Size = Vector3.new(
+        math.max(size.X, 0.01), math.max(size.Y, 0.01), math.max(size.Z, 0.01))
+    adorn.Adornee     = part
+    adorn.Parent      = part
+    adorn.ZIndex      = (vis == 1) and 2 or 1
     adorn.AlwaysOnTop = (vis == 1)
-    adorn.Visible = false
+    adorn.Visible     = false
     return adorn
 end
 
@@ -518,14 +633,17 @@ local function applyChams(char)
         if part:IsA("BasePart") and not IgnoreNames[part.Name] then
             local ad = ChamsCache[part]
             if not ad then
-                ad = { createAdornment(part, 1), createAdornment(part, 2) }
+                ad = {
+                    createAdornment(part, 1),
+                    createAdornment(part, 2),
+                }
                 ChamsCache[part] = ad
             end
-            ad[1].Visible = true
-            ad[2].Visible = true
-            ad[1].Color3 = ChamsState.OccludedColor[1]
+            ad[1].Visible      = true
+            ad[2].Visible      = true
+            ad[1].Color3       = ChamsState.OccludedColor[1]
             ad[1].Transparency = ChamsState.OccludedColor[2]
-            ad[2].Color3 = ChamsState.VisibleColor[1]
+            ad[2].Color3       = ChamsState.VisibleColor[1]
             ad[2].Transparency = ChamsState.VisibleColor[2]
         end
     end
@@ -535,17 +653,32 @@ local chamsWasActive = false
 
 local function chamsStep()
     if ChamsState.Enabled then
-        for _, ad in pairs(ChamsCache) do ad[1].Visible = false; ad[2].Visible = false end
-        for _, char in ipairs(utility:getPlayers()) do
-            if char.Parent and shouldChams(char) then applyChams(char) end
+        for _, ad in pairs(ChamsCache) do
+            ad[1].Visible = false
+            ad[2].Visible = false
         end
+
+        for _, char in ipairs(utility:getPlayers()) do
+            if char.Parent and shouldChams(char) then
+                applyChams(char)
+            end
+        end
+
         chamsWasActive = true
     elseif chamsWasActive then
-        for _, ad in pairs(ChamsCache) do ad[1].Visible = false; ad[2].Visible = false end
+        for _, ad in pairs(ChamsCache) do
+            ad[1].Visible = false
+            ad[2].Visible = false
+        end
         chamsWasActive = false
     end
+
     for part, ad in pairs(ChamsCache) do
-        if not part.Parent then ad[1]:Destroy(); ad[2]:Destroy(); ChamsCache[part] = nil end
+        if not part.Parent then
+            ad[1]:Destroy()
+            ad[2]:Destroy()
+            ChamsCache[part] = nil
+        end
     end
 end
 
@@ -553,57 +686,79 @@ end
 -- WORLD VISUALS - lighting + atmosphere
 ----------------------------------------------------------------
 local LightState = {
-    Enabled = false, Ambient = Color3.fromRGB(255, 255, 255),
-    OutdoorAmbient = Color3.fromRGB(255, 255, 255), Brightness = 2,
-    ClockTime = 14, FogEnd = 100000, FogStart = 0,
+    Enabled        = false,
+    Ambient        = Color3.fromRGB(255, 255, 255),
+    OutdoorAmbient = Color3.fromRGB(255, 255, 255),
+    Brightness     = 2,
+    ClockTime      = 14,
+    FogEnd         = 100000,
+    FogStart       = 0,
 }
+
 local LightingBackup = nil
 
 local function snapshotLighting()
     if LightingBackup then return end
     LightingBackup = {
-        Ambient = Lighting.Ambient, OutdoorAmbient = Lighting.OutdoorAmbient,
-        Brightness = Lighting.Brightness, ClockTime = Lighting.ClockTime,
-        FogEnd = Lighting.FogEnd, FogStart = Lighting.FogStart, FogColor = Lighting.FogColor,
+        Ambient        = Lighting.Ambient,
+        OutdoorAmbient = Lighting.OutdoorAmbient,
+        Brightness     = Lighting.Brightness,
+        ClockTime      = Lighting.ClockTime,
+        FogEnd         = Lighting.FogEnd,
+        FogStart       = Lighting.FogStart,
+        FogColor       = Lighting.FogColor,
     }
 end
 
 local function applyLighting()
     if not LightState.Enabled then return end
-    Lighting.Ambient = LightState.Ambient
+    Lighting.Ambient        = LightState.Ambient
     Lighting.OutdoorAmbient = LightState.OutdoorAmbient
-    Lighting.Brightness = LightState.Brightness
-    Lighting.ClockTime = LightState.ClockTime
-    Lighting.FogEnd = math.max(LightState.FogEnd, LightState.FogStart)
-    Lighting.FogStart = math.min(LightState.FogStart, LightState.FogEnd)
+    Lighting.Brightness     = LightState.Brightness
+    Lighting.ClockTime      = LightState.ClockTime
+    Lighting.FogEnd         = math.max(LightState.FogEnd, LightState.FogStart)
+    Lighting.FogStart       = math.min(LightState.FogStart, LightState.FogEnd)
 end
 
 local function restoreLighting()
     if not LightingBackup then return end
-    Lighting.Ambient = LightingBackup.Ambient
+    Lighting.Ambient        = LightingBackup.Ambient
     Lighting.OutdoorAmbient = LightingBackup.OutdoorAmbient
-    Lighting.Brightness = LightingBackup.Brightness
-    Lighting.ClockTime = LightingBackup.ClockTime
-    Lighting.FogEnd = LightingBackup.FogEnd
-    Lighting.FogStart = LightingBackup.FogStart
-    Lighting.FogColor = LightingBackup.FogColor
+    Lighting.Brightness     = LightingBackup.Brightness
+    Lighting.ClockTime      = LightingBackup.ClockTime
+    Lighting.FogEnd         = LightingBackup.FogEnd
+    Lighting.FogStart       = LightingBackup.FogStart
+    Lighting.FogColor       = LightingBackup.FogColor
     LightingBackup = nil
 end
 
 local AtmState = {
-    Enabled = false, Density = 0.3, Haze = 0, Glare = 0,
-    Color = Color3.fromRGB(199, 199, 199), Decay = Color3.fromRGB(106, 112, 125), Offset = 0,
+    Enabled = false,
+    Density = 0.3,
+    Haze    = 0,
+    Glare   = 0,
+    Color   = Color3.fromRGB(199, 199, 199),
+    Decay   = Color3.fromRGB(106, 112, 125),
+    Offset  = 0,
 }
+
 local AtmBackups = {}
 local AtmTarget = nil
 
 local function findAtmosphere()
-    return Lighting:FindFirstChildOfClass("Atmosphere") or Workspace:FindFirstChildOfClass("Atmosphere")
+    return Lighting:FindFirstChildOfClass("Atmosphere")
+        or Workspace:FindFirstChildOfClass("Atmosphere")
 end
 
 local function copyAtmosphere(atm)
-    return { Density = atm.Density, Haze = atm.Haze, Glare = atm.Glare,
-        Color = atm.Color, Decay = atm.Decay, Offset = atm.Offset }
+    return {
+        Density = atm.Density,
+        Haze    = atm.Haze,
+        Glare   = atm.Glare,
+        Color   = atm.Color,
+        Decay   = atm.Decay,
+        Offset  = atm.Offset,
+    }
 end
 
 local function snapshotAtmosphere()
@@ -613,15 +768,18 @@ local function snapshotAtmosphere()
 end
 
 local function ensureAtmosphere()
-    if AtmTarget and AtmTarget.Parent then return AtmTarget end
+    if AtmTarget and AtmTarget.Parent then
+        return AtmTarget
+    end
+
     local atm = findAtmosphere()
     if atm then
-        AtmTarget = atm
+        AtmTarget  = atm
         if not AtmBackups[atm] then AtmBackups[atm] = copyAtmosphere(atm) end
     else
         atm = Instance.new("Atmosphere")
         atm.Parent = Lighting
-        AtmTarget = atm
+        AtmTarget  = atm
         AtmBackups[atm] = { Created = true }
     end
     return atm
@@ -631,86 +789,66 @@ local function applyAtmosphere()
     if not AtmState.Enabled then return end
     local atm = ensureAtmosphere()
     atm.Density = AtmState.Density
-    atm.Haze = AtmState.Haze
-    atm.Glare = AtmState.Glare
-    atm.Color = AtmState.Color
-    atm.Decay = AtmState.Decay
-    atm.Offset = math.clamp(AtmState.Offset, -1, 1)
+    atm.Haze    = AtmState.Haze
+    atm.Glare   = AtmState.Glare
+    atm.Color   = AtmState.Color
+    atm.Decay   = AtmState.Decay
+    atm.Offset  = math.clamp(AtmState.Offset, -1, 1)
 end
 
 local function restoreAtmosphere()
     for atm, values in pairs(AtmBackups) do
         Runtime:Call("restore atmosphere", function()
-            if values.Created then atm:Destroy()
-            else for key, value in pairs(values) do atm[key] = value end end
+            if values.Created then
+                atm:Destroy()
+            else
+                for key, value in pairs(values) do atm[key] = value end
+            end
         end)
         AtmBackups[atm] = nil
     end
-    AtmTarget = nil
+    AtmTarget  = nil
 end
 
 ----------------------------------------------------------------
 -- FOV LOCK
 ----------------------------------------------------------------
 local FOVState = {
-    Enabled = false, Value = 120,
-    Backups = setmetatable({}, { __mode = "k" }),
-    Watchers = setmetatable({}, { __mode = "k" }),
+    Enabled  = false,
+    Value    = 120,
+    Backups  = setmetatable({}, { __mode = "k" }),
+    Signals  = setmetatable({}, { __mode = "k" }),
 }
 
-local function fovTarget()
-    return math.clamp(FOVState.Value, 1, 120)
+local function attachFOVSignal(cam)
+    if not cam or FOVState.Signals[cam] then return end
+    FOVState.Signals[cam] = cam:GetPropertyChangedSignal("FieldOfView"):Connect(function()
+        if FOVState.Enabled and cam.FieldOfView ~= FOVState.Value then
+            cam.FieldOfView = FOVState.Value
+        end
+    end)
 end
 
 local function enforceFOV()
     if not FOVState.Enabled then return end
     local cam = getCamera()
-    if not cam then return end
-    if not FOVState.Backups[cam] then FOVState.Backups[cam] = cam.FieldOfView end
-    local target = fovTarget()
-    if math.abs(cam.FieldOfView - target) > 0.05 then
-        cam.FieldOfView = target
+    if cam then
+        if not FOVState.Backups[cam] then FOVState.Backups[cam] = cam.FieldOfView end
+        attachFOVSignal(cam)
+        if cam.FieldOfView ~= FOVState.Value then cam.FieldOfView = FOVState.Value end
     end
 end
 
-local function watchCameraFOV(cam)
-    if not cam then return end
-    if FOVState.Watchers[cam] then return end
-    FOVState.Watchers[cam] = cam:GetPropertyChangedSignal("FieldOfView"):Connect(function()
-        if not FOVState.Enabled then return end
-        local target = fovTarget()
-        if math.abs(cam.FieldOfView - target) > 0.05 then
-            cam.FieldOfView = target
-        end
-    end)
-end
-
 local function restoreFOV()
-    for cam, connection in pairs(FOVState.Watchers) do
-        Runtime:Call("fov watcher", function() connection:Disconnect() end)
-        FOVState.Watchers[cam] = nil
+    for cam, signal in pairs(FOVState.Signals) do
+        pcall(function() signal:Disconnect() end)
+        FOVState.Signals[cam] = nil
     end
     for cam, value in pairs(FOVState.Backups) do
         Runtime:Call("restore camera FOV", function() cam.FieldOfView = value end)
         FOVState.Backups[cam] = nil
     end
 end
-
-watchCameraFOV(getCamera())
-
-Runtime:Connect(Workspace:GetPropertyChangedSignal("CurrentCamera"), "camera change FOV", function()
-    local cam = getCamera()
-    if cam then watchCameraFOV(cam) end
-    if FOVState.Enabled then enforceFOV() end
-end)
-
-Runtime:Connect(LocalPlayer.CharacterAdded, "respawn FOV", function()
-    task.wait(0.5)
-    if FOVState.Enabled then
-        watchCameraFOV(getCamera())
-        enforceFOV()
-    end
-end)
 
 ----------------------------------------------------------------
 -- SHARED SCREEN HELPERS
@@ -722,12 +860,6 @@ local function project(cam, pos)
     local sp, on = cam:WorldToViewportPoint(pos)
     return Vector2.new(sp.X, sp.Y), on, sp.Z
 end
-
-local function guiPoint(gui, point)
-    return point - gui.AbsolutePosition
-end
-
-local function px(v) return math.floor(v + 0.5) end
 
 local function mk(cls, parent, props)
     local o = Instance.new(cls)
@@ -755,7 +887,7 @@ end
 local AimAssistState = {
     Enabled = false, Smoothness = 0.35, FOV = 140,
     VisibleCheck = false, Hold = true, Key = "E",
-    Color = Color3.fromRGB(255, 200, 80), ShowCircle = true, Sticky = false,
+    Color = Color3.fromRGB(255, 255, 255), ShowCircle = true, Sticky = false,
 }
 
 local TargetingState = {
@@ -784,7 +916,9 @@ function utility:RollHitChance(roll)
     return (roll or self.HitChanceRandom:NextNumber(0, 100)) < chance
 end
 
-local TriggerState = { Enabled = false, Delay = 0.06, FOV = 8, VisibleCheck = false }
+local TriggerState = {
+    Enabled = false, Delay = 0.06, FOV = 8, VisibleCheck = false,
+}
 
 local aimColor = Color3.fromRGB(255, 255, 255)
 
@@ -805,19 +939,42 @@ end
 ----------------------------------------------------------------
 local AimSection = Combat:Section({ Name = "silent aim", Side = 1 })
 
-AimSection:Toggle({ Name = "enabled", Flag = "aim_enabled", Default = false,
-    Callback = function(v) utility.SilentAim = v; if not v then utility.target = nil end end })
-AimSection:Toggle({ Name = "visible check", Flag = "aim_vischeck", Default = false,
-    Callback = function(v) utility.VisibleCheck = v end })
-AimSection:Toggle({ Name = "fov circle", Flag = "aim_circle", Default = true,
-    Callback = function(v) utility.ShowCircle = v end })
-AimSection:Slider({ Name = "fov", Flag = "aim_fov", Min = 10, Max = 800, Default = 120, Decimals = 1,
-    Callback = function(v) utility.FOV = v end })
-AimSection:Slider({ Name = "hit chance", Flag = "aim_hitchance", Min = 0, Max = 100, Default = 100,
-    Decimals = 1, Suffix = "%", Callback = function(v) utility.HitChance = math.clamp(v, 0, 100) end })
-AimSection:Label({ Name = "One roll per shot; failed rolls use normal aim" })
-AimSection:Label({ Name = "fov color" }):Colorpicker({ Name = "aim_color", Flag = "aim_color",
-    Default = Color3.fromRGB(255, 255, 255), Callback = function(c) aimColor = c end })
+AimSection:Toggle({
+    Name = "enabled", Flag = "aim_enabled", Default = false,
+    Callback = function(v)
+        utility.SilentAim = v
+        if not v then utility.target = nil end
+    end
+})
+
+AimSection:Toggle({
+    Name = "visible check", Flag = "aim_vischeck", Default = false,
+    Callback = function(v) utility.VisibleCheck = v end
+})
+
+AimSection:Toggle({
+    Name = "fov circle", Flag = "aim_circle", Default = true,
+    Callback = function(v) utility.ShowCircle = v end
+})
+
+AimSection:Slider({
+    Name = "fov", Flag = "aim_fov",
+    Min = 10, Max = 800, Default = 120,
+    Decimals = 1,
+    Callback = function(v) utility.FOV = v end
+})
+
+AimSection:Slider({
+    Name = "hit chance", Flag = "aim_hitchance", Min = 0, Max = 100, Default = 100,
+    Decimals = 1, Suffix = "%",
+    Callback = function(v) utility.HitChance = math.clamp(v, 0, 100) end,
+})
+
+AimSection:Label({ Name = "fov color" }):Colorpicker({
+    Name = "aim_color", Flag = "aim_color",
+    Default = Color3.fromRGB(255, 255, 255),
+    Callback = function(c) aimColor = c end
+})
 
 ----------------------------------------------------------------
 -- FOV CIRCLES
@@ -833,14 +990,16 @@ local function resolveGuiParent()
         local ok, hui = pcall(gethui)
         if ok and hui and canParent(hui) then return hui end
     end
+
     local ok, core = pcall(function() return game:GetService("CoreGui") end)
     if ok and core and canParent(core) then return core end
+
     return LocalPlayer:WaitForChild("PlayerGui")
 end
 
 local guiParent = resolveGuiParent()
 
-for _, oldName in ipairs({ "VergilFOV", "VergilHUD", "VergilStudio" }) do
+for _, oldName in ipairs({ "VergilFOV", "VergilESP", "VergilHUD", "VergilDebugOverlay", "VergilRadar", "VergilStudio" }) do
     local old = guiParent:FindFirstChild(oldName)
     if old then old:Destroy() end
 end
@@ -860,29 +1019,39 @@ local function makeRing()
     f.AnchorPoint = Vector2.new(0.5, 0.5)
     f.Visible = false
     f.Parent = fovGui
-    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(1, 0); c.Parent = f
-    local s = Instance.new("UIStroke"); s.Thickness = 1.5; s.Transparency = 0.1; s.Parent = f
+
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(1, 0)
+    c.Parent = f
+
+    local s = Instance.new("UIStroke")
+    s.Thickness = 1.5
+    s.Transparency = 0.1
+    s.Parent = f
+
     return f, s
 end
 
 local aimRing, aimRingStroke = makeRing()
-local aaRing, aaRingStroke = makeRing()
+local aaRing,  aaRingStroke  = makeRing()
 
 local function ringStep()
     local mouse = UserInputService:GetMouseLocation()
+
     if not Runtime.Paused and utility.SilentAim and utility.ShowCircle then
         local r = utility.FOV or 120
-        aimRing.Visible = true
-        aimRing.Size = UDim2.fromOffset(r * 2, r * 2)
+        aimRing.Visible  = true
+        aimRing.Size     = UDim2.fromOffset(r * 2, r * 2)
         aimRing.Position = UDim2.fromOffset(mouse.X, mouse.Y)
         aimRingStroke.Color = Studio:Color(aimColor)
     else
         aimRing.Visible = false
     end
+
     if not Runtime.Paused and AimAssistState.Enabled and AimAssistState.ShowCircle then
         local r = AimAssistState.FOV or 140
-        aaRing.Visible = true
-        aaRing.Size = UDim2.fromOffset(r * 2, r * 2)
+        aaRing.Visible  = true
+        aaRing.Size     = UDim2.fromOffset(r * 2, r * 2)
         aaRing.Position = UDim2.fromOffset(mouse.X, mouse.Y)
         aaRingStroke.Color = Studio:Color(AimAssistState.Color)
     else
@@ -891,73 +1060,11 @@ local function ringStep()
 end
 
 ----------------------------------------------------------------
--- NAME PROTECT
-----------------------------------------------------------------
-local NameProtect = { Enabled = false, Mode = "numbered", Custom = "you", Map = {}, Counter = 0 }
-local npSeen = setmetatable({}, { __mode = "k" })
-
-local function npName(plr)
-    if plr == LocalPlayer then return NameProtect.Custom end
-    if NameProtect.Mode == "all" then return "protected" end
-    local m = NameProtect.Map[plr.UserId]
-    if not m then
-        NameProtect.Counter = NameProtect.Counter + 1
-        m = "Player" .. NameProtect.Counter
-        NameProtect.Map[plr.UserId] = m
-    end
-    return m
-end
-
-local function npScan()
-    if not NameProtect.Enabled then
-        for lbl, data in pairs(npSeen) do
-            if lbl.Parent and lbl.Text == data.applied then lbl.Text = data.orig end
-            npSeen[lbl] = nil
-        end
-        return
-    end
-    for lbl in pairs(npSeen) do if not lbl.Parent then npSeen[lbl] = nil end end
-    for _, plr in ipairs(Players:GetPlayers()) do
-        local char = plr.Character
-        if not char then continue end
-        for _, gui in ipairs(char:GetDescendants()) do
-            if gui:IsA("BillboardGui") then
-                for _, lbl in ipairs(gui:GetDescendants()) do
-                    if lbl:IsA("TextLabel") then
-                        local d = npSeen[lbl]
-                        local original = d and lbl.Text == d.applied and d.orig or lbl.Text
-                        local fake = npName(plr)
-                        local replaced = original
-                        local names = { plr.Name, plr.DisplayName }
-                        table.sort(names, function(a, b) return #a > #b end)
-                        for _, name in ipairs(names) do
-                            if name ~= "" then
-                                local escaped = name:gsub("(%W)", "%%%1")
-                                replaced = replaced:gsub("%f[%w_]" .. escaped .. "%f[^%w_]", function() return fake end)
-                            end
-                        end
-                        if replaced ~= original then
-                            npSeen[lbl] = { orig = original, applied = replaced }
-                            if lbl.Text ~= replaced then lbl.Text = replaced end
-                        elseif d then npSeen[lbl] = nil end
-                    end
-                end
-            end
-        end
-    end
-end
-
-Runtime:Spawn("name protection", function()
-    while not Runtime.Unloaded do
-        if NameProtect.Enabled or next(npSeen) then Runtime:Call("name protection scan", npScan) end
-        task.wait(0.25)
-    end
-end)
-
-----------------------------------------------------------------
 -- TARGET ACQUISITION
 ----------------------------------------------------------------
-function utility:GetTargetPart(char) return self:GetTargetParts(char)[1] end
+function utility:GetTargetPart(char)
+    return self:GetTargetParts(char)[1]
+end
 
 function utility:GetTargetParts(char)
     local result, seen = {}, {}
@@ -975,6 +1082,7 @@ function utility:TargetScore(cam, char, mouse, fov, vischeck)
     if not hum or hum.Health <= 0 then return nil end
     if not TargetingState.IncludeNPCs and isNpc(char) then return nil end
     if self:isFriendlyCharacter(char) then return nil end
+
     local bestPart, bestScore, bestScreen = nil, math.huge, math.huge
     for _, part in ipairs(self:GetTargetParts(char)) do
         local distance = (part.Position - cam.CFrame.Position).Magnitude
@@ -1000,6 +1108,7 @@ function utility:GetClosestToMouse(cam, fov, vischeck, preferred)
         local part = self:TargetScore(cam, preferred.Parent, mouse, fov, vischeck)
         if part then return part end
     end
+
     local closest, bestScore, bestScreen = nil, math.huge, math.huge
     for _, char in ipairs(self:getPlayers()) do
         local part, score, screenDistance = self:TargetScore(cam, char, mouse, fov, vischeck)
@@ -1016,9 +1125,13 @@ end
 local heldInputs = {}
 
 local function inputId(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton2 then return "RightMouse" end
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        return "RightMouse"
+    end
     local key = input.KeyCode
-    if key and key ~= Enum.KeyCode.Unknown then return key.Name end
+    if key and key ~= Enum.KeyCode.Unknown then
+        return key.Name
+    end
     return nil
 end
 
@@ -1027,16 +1140,21 @@ Runtime:Connect(UserInputService.InputBegan, "input began", function(input, game
     local id = inputId(input)
     if id then heldInputs[id] = true end
 end)
+
 Runtime:Connect(UserInputService.InputEnded, "input ended", function(input)
     local id = inputId(input)
     if id then heldInputs[id] = nil end
 end)
+
 Runtime:Connect(UserInputService.WindowFocusReleased, "focus lost", function()
     Runtime.Focused = false
     for id in pairs(heldInputs) do heldInputs[id] = nil end
     if Runtime.ReleaseMouse then Runtime.ReleaseMouse() end
 end)
-Runtime:Connect(UserInputService.WindowFocused, "focus gained", function() Runtime.Focused = true end)
+
+Runtime:Connect(UserInputService.WindowFocused, "focus gained", function()
+    Runtime.Focused = true
+end)
 
 local aimTarget = nil
 
@@ -1046,14 +1164,18 @@ local function aimStep(dt)
         aimTarget = nil
         return
     end
+
     local cam = getCamera()
     if not cam then aimTarget = nil; return end
+
     aimTarget = utility:GetClosestToMouse(cam, AimAssistState.FOV, AimAssistState.VisibleCheck,
         AimAssistState.Sticky and aimTarget or nil)
     if not aimTarget then return end
+
     local origin = cam.CFrame.Position
     local direction = aimTarget.Position - origin
     if direction.Magnitude <= 1e-4 then return end
+
     local desired = CFrame.lookAt(origin, aimTarget.Position)
     local alpha = 1 - math.clamp(AimAssistState.Smoothness, 0, 0.99) ^ (math.clamp(dt or 1 / 60, 0, 0.1) * 60)
     cam.CFrame = cam.CFrame:Lerp(desired, alpha)
@@ -1084,14 +1206,18 @@ local function triggerStep()
         Runtime:Notify("Trigger input is unavailable in this executor")
         return
     end
+
     local cam = getCamera()
     if not cam then return end
     local mouse = UserInputService:GetMouseLocation()
     local target = utility:GetClosestToMouse(cam, TriggerState.FOV, TriggerState.VisibleCheck)
     local now = os.clock()
-    if target ~= TriggerPress.Target then TriggerPress.Target, TriggerPress.Since = target, now end
+    if target ~= TriggerPress.Target then
+        TriggerPress.Target, TriggerPress.Since = target, now
+    end
     if not target or now - TriggerPress.Since < TriggerState.Delay
        or now - TriggerPress.Last < TriggerState.Delay then return end
+
     TriggerPress.Last = now
     TriggerPress.X, TriggerPress.Y = math.floor(mouse.X), math.floor(mouse.Y)
     TriggerPress.Down = true
@@ -1103,26 +1229,36 @@ local function triggerStep()
         Runtime:Call("release trigger", releaseTrigger)
         return
     end
-    Runtime:Spawn("trigger release", function() task.wait(0.02); releaseTrigger() end)
+    Runtime:Spawn("trigger release", function()
+        task.wait(0.02)
+        releaseTrigger()
+    end)
 end
 
 ----------------------------------------------------------------
 -- HEALTH CHAMS
 ----------------------------------------------------------------
 local HealthChamsState = {
-    Enabled = false, Color = Color3.fromRGB(0, 255, 120),
-    FolderPath = { "CurrentMap", "HealthPickups" }, ModelName = "HealthPickup",
+    Enabled = false,
+    Color = Color3.fromRGB(0, 255, 120),
+    FolderPath = { "CurrentMap", "HealthPickups" },
+    ModelName = "HealthPickup",
 }
 local healthHighlights = {}
 
 local function hcFolder()
     local node = Workspace
-    for _, name in ipairs(HealthChamsState.FolderPath) do node = node and node:FindFirstChild(name) end
+    for _, name in ipairs(HealthChamsState.FolderPath) do
+        node = node and node:FindFirstChild(name)
+    end
     return node
 end
 
 local function hcClear()
-    for adornee, hl in pairs(healthHighlights) do hl:Destroy(); healthHighlights[adornee] = nil end
+    for adornee, hl in pairs(healthHighlights) do
+        hl:Destroy()
+        healthHighlights[adornee] = nil
+    end
 end
 
 Runtime:Spawn("health pickups", function()
@@ -1132,8 +1268,10 @@ Runtime:Spawn("health pickups", function()
                 if next(healthHighlights) then hcClear() end
                 return
             end
+
             local folder = hcFolder()
             local live = {}
+
             if folder then
                 for _, pickup in ipairs(folder:GetChildren()) do
                     if pickup.Name == HealthChamsState.ModelName and pickup.Parent then
@@ -1153,158 +1291,308 @@ Runtime:Spawn("health pickups", function()
                     end
                 end
             end
+
             for adornee, hl in pairs(healthHighlights) do
-                if not live[adornee] or not adornee.Parent then hl:Destroy(); healthHighlights[adornee] = nil end
+                if not live[adornee] or not adornee.Parent then
+                    hl:Destroy()
+                    healthHighlights[adornee] = nil
+                end
             end
         end)
         task.wait(0.4)
     end
 end)
-
 ----------------------------------------------------------------
 -- AIM ASSIST UI
 ----------------------------------------------------------------
 local AASection = Combat:Section({ Name = "aim assist", Side = 2 })
-AASection:Toggle({ Name = "enabled", Flag = "aa_enabled", Default = false,
-    Callback = function(v) AimAssistState.Enabled = v end })
-AASection:Dropdown({ Name = "hold key", Flag = "aa_key", Items = { "E", "Q", "C", "F", "LeftShift", "RightMouse" }, Default = "E",
-    Callback = function(v) AimAssistState.Key = v end })
-AASection:Toggle({ Name = "hold to aim", Flag = "aa_hold", Default = true,
-    Callback = function(v) AimAssistState.Hold = v end })
-AASection:Toggle({ Name = "keep current target", Flag = "aa_sticky", Default = false,
-    Callback = function(v) AimAssistState.Sticky = v end })
-AASection:Toggle({ Name = "visible check", Flag = "aa_vis", Default = false,
-    Callback = function(v) AimAssistState.VisibleCheck = v end })
-AASection:Toggle({ Name = "fov circle", Flag = "aa_circle", Default = true,
-    Callback = function(v) AimAssistState.ShowCircle = v end })
-AASection:Slider({ Name = "smoothing", Flag = "aa_smooth", Min = 0, Max = 0.95, Default = 0.35, Decimals = 0.01,
-    Callback = function(v) AimAssistState.Smoothness = v end })
-AASection:Slider({ Name = "fov", Flag = "aa_fov", Min = 10, Max = 800, Default = 140, Decimals = 1,
-    Callback = function(v) AimAssistState.FOV = v end })
-AASection:Label({ Name = "fov color" }):Colorpicker({ Name = "aa_color", Flag = "aa_color",
-    Default = Color3.fromRGB(255, 200, 80), Callback = function(c) AimAssistState.Color = c end })
+
+AASection:Toggle({
+    Name = "enabled", Flag = "aa_enabled", Default = false,
+    Callback = function(v) AimAssistState.Enabled = v end
+})
+
+AASection:Dropdown({
+    Name = "hold key", Flag = "aa_key",
+    Items = { "E", "Q", "C", "F", "LeftShift", "RightMouse" }, Default = "E",
+    Callback = function(v) AimAssistState.Key = v end
+})
+
+AASection:Toggle({
+    Name = "hold to aim", Flag = "aa_hold", Default = true,
+    Callback = function(v) AimAssistState.Hold = v end
+})
+
+AASection:Toggle({
+    Name = "keep current target", Flag = "aa_sticky", Default = false,
+    Callback = function(v) AimAssistState.Sticky = v end
+})
+
+AASection:Toggle({
+    Name = "visible check", Flag = "aa_vis", Default = false,
+    Callback = function(v) AimAssistState.VisibleCheck = v end
+})
+
+AASection:Toggle({
+    Name = "fov circle", Flag = "aa_circle", Default = true,
+    Callback = function(v) AimAssistState.ShowCircle = v end
+})
+
+AASection:Slider({
+    Name = "smoothing", Flag = "aa_smooth",
+    Min = 0, Max = 0.95, Default = 0.35, Decimals = 0.01,
+    Callback = function(v) AimAssistState.Smoothness = v end
+})
+
+AASection:Slider({
+    Name = "fov", Flag = "aa_fov",
+    Min = 10, Max = 800, Default = 140, Decimals = 1,
+    Callback = function(v) AimAssistState.FOV = v end
+})
+
+AASection:Label({ Name = "fov color" }):Colorpicker({
+    Name = "aa_color", Flag = "aa_color",
+    Default = Color3.fromRGB(255, 255, 255),
+    Callback = function(c) AimAssistState.Color = c end
+})
 
 ----------------------------------------------------------------
 -- TRIGGER BOT UI
 ----------------------------------------------------------------
 local TBSection = Combat:Section({ Name = "trigger bot", Side = 2 })
-TBSection:Toggle({ Name = "enabled", Flag = "tb_enabled", Default = false,
-    Callback = function(v) TriggerState.Enabled = v end })
-TBSection:Toggle({ Name = "visible check", Flag = "tb_vis", Default = false,
-    Callback = function(v) TriggerState.VisibleCheck = v end })
-TBSection:Slider({ Name = "fov", Flag = "tb_fov", Min = 1, Max = 100, Default = 8, Decimals = 1,
-    Callback = function(v) TriggerState.FOV = v end })
-TBSection:Slider({ Name = "delay", Flag = "tb_delay", Min = 0.01, Max = 0.5, Default = 0.06, Decimals = 0.01,
-    Callback = function(v) TriggerState.Delay = v end })
+
+TBSection:Toggle({
+    Name = "enabled", Flag = "tb_enabled", Default = false,
+    Callback = function(v) TriggerState.Enabled = v end
+})
+
+TBSection:Toggle({
+    Name = "visible check", Flag = "tb_vis", Default = false,
+    Callback = function(v) TriggerState.VisibleCheck = v end
+})
+
+TBSection:Slider({
+    Name = "fov", Flag = "tb_fov",
+    Min = 1, Max = 100, Default = 8, Decimals = 1,
+    Callback = function(v) TriggerState.FOV = v end
+})
+
+TBSection:Slider({
+    Name = "delay", Flag = "tb_delay",
+    Min = 0.01, Max = 0.5, Default = 0.06, Decimals = 0.01,
+    Callback = function(v) TriggerState.Delay = v end
+})
 
 ----------------------------------------------------------------
 -- HEALTH CHAMS UI
 ----------------------------------------------------------------
 local HCSection = Visuals:Section({ Name = "health chams", Side = 2 })
-HCSection:Toggle({ Name = "enabled", Flag = "hc_enabled", Default = false,
-    Callback = function(v) HealthChamsState.Enabled = v end })
-HCSection:Label({ Name = "color" }):Colorpicker({ Name = "hc_color", Flag = "hc_color",
-    Default = Color3.fromRGB(0, 255, 120), Callback = function(c) HealthChamsState.Color = c end })
 
-----------------------------------------------------------------
--- NAME PROTECT UI
-----------------------------------------------------------------
-local NPSection = Misc:Section({ Name = "name protect", Side = 2 })
-NPSection:Toggle({ Name = "enabled", Flag = "np_enabled", Default = false,
-    Callback = function(v) NameProtect.Enabled = v end })
-NPSection:Dropdown({ Name = "mode", Flag = "np_mode", Items = { "numbered", "all same" }, Default = "numbered",
-    Callback = function(v) NameProtect.Mode = (v == "all same") and "all" or "numbered" end })
-NPSection:Textbox({ Name = "local name", Flag = "np_local", Default = "you", Finished = true,
-    Callback = function(v) NameProtect.Custom = (v ~= nil and v ~= "") and tostring(v):sub(1, 40) or "you" end })
+HCSection:Toggle({
+    Name = "enabled", Flag = "hc_enabled", Default = false,
+    Callback = function(v) HealthChamsState.Enabled = v end
+})
+
+HCSection:Label({ Name = "color" }):Colorpicker({
+    Name = "hc_color", Flag = "hc_color",
+    Default = Color3.fromRGB(0, 255, 120),
+    Callback = function(c) HealthChamsState.Color = c end
+})
 
 ----------------------------------------------------------------
 -- CHAMS UI
 ----------------------------------------------------------------
 local ChamsSection = Visuals:Section({ Name = "chams", Side = 1 })
-ChamsSection:Toggle({ Name = "enabled", Flag = "chams_enabled", Default = false,
-    Callback = function(v) ChamsState.Enabled = v end })
-ChamsSection:Toggle({ Name = "team check", Flag = "chams_team", Default = true,
-    Callback = function(v) ChamsState.TeamCheck = v end })
-ChamsSection:Toggle({ Name = "include npcs", Flag = "chams_npcs", Default = true,
-    Callback = function(v) ChamsState.IncludeNPCs = v end })
-ChamsSection:Label({ Name = "visible color" }):Colorpicker({ Name = "chams_vis", Flag = "chams_vis",
-    Default = Color3.fromRGB(155, 155, 255), Callback = function(c) ChamsState.VisibleColor[1] = c end })
-ChamsSection:Label({ Name = "occluded color" }):Colorpicker({ Name = "chams_occ", Flag = "chams_occ",
-    Default = Color3.fromRGB(255, 255, 255), Callback = function(c) ChamsState.OccludedColor[1] = c end })
-ChamsSection:Slider({ Name = "visible transparency", Flag = "chams_vis_t", Min = 0, Max = 1, Default = 0, Decimals = 0.01,
-    Callback = function(v) ChamsState.VisibleColor[2] = v end })
-ChamsSection:Slider({ Name = "occluded transparency", Flag = "chams_occ_t", Min = 0, Max = 1, Default = 0.8, Decimals = 0.01,
-    Callback = function(v) ChamsState.OccludedColor[2] = v end })
+
+ChamsSection:Toggle({
+    Name = "enabled", Flag = "chams_enabled", Default = false,
+    Callback = function(v) ChamsState.Enabled = v end
+})
+
+ChamsSection:Toggle({
+    Name = "team check", Flag = "chams_team", Default = true,
+    Callback = function(v) ChamsState.TeamCheck = v end
+})
+
+ChamsSection:Toggle({
+    Name = "include npcs", Flag = "chams_npcs", Default = true,
+    Callback = function(v) ChamsState.IncludeNPCs = v end
+})
+
+ChamsSection:Label({ Name = "visible color" }):Colorpicker({
+    Name = "chams_vis", Flag = "chams_vis",
+    Default = Color3.fromRGB(155, 155, 255),
+    Callback = function(c) ChamsState.VisibleColor[1] = c end
+})
+
+ChamsSection:Label({ Name = "occluded color" }):Colorpicker({
+    Name = "chams_occ", Flag = "chams_occ",
+    Default = Color3.fromRGB(255, 255, 255),
+    Callback = function(c) ChamsState.OccludedColor[1] = c end
+})
+
+ChamsSection:Slider({
+    Name = "visible transparency", Flag = "chams_vis_t",
+    Min = 0, Max = 1, Default = 0,
+    Decimals = 0.01,
+    Callback = function(v) ChamsState.VisibleColor[2] = v end
+})
+
+ChamsSection:Slider({
+    Name = "occluded transparency", Flag = "chams_occ_t",
+    Min = 0, Max = 1, Default = 0.8,
+    Decimals = 0.01,
+    Callback = function(v) ChamsState.OccludedColor[2] = v end
+})
 
 ----------------------------------------------------------------
 -- LIGHTING UI
 ----------------------------------------------------------------
 local LightSection = Visuals:Section({ Name = "lighting", Side = 2 })
-LightSection:Toggle({ Name = "enabled", Flag = "light_enabled", Default = false,
+
+LightSection:Toggle({
+    Name = "enabled", Flag = "light_enabled", Default = false,
     Callback = function(v)
         if LightState.Enabled == v then return end
         LightState.Enabled = v
-        if v then snapshotLighting(); applyLighting() else restoreLighting() end
-    end })
-LightSection:Label({ Name = "ambient" }):Colorpicker({ Name = "light_ambient", Flag = "light_ambient",
-    Default = Color3.fromRGB(255, 255, 255), Callback = function(c) LightState.Ambient = c end })
-LightSection:Label({ Name = "outdoor ambient" }):Colorpicker({ Name = "light_outdoor", Flag = "light_outdoor",
-    Default = Color3.fromRGB(255, 255, 255), Callback = function(c) LightState.OutdoorAmbient = c end })
-LightSection:Slider({ Name = "brightness", Flag = "light_bright", Min = 0, Max = 5, Default = 2, Decimals = 0.01,
-    Callback = function(v) LightState.Brightness = v end })
-LightSection:Slider({ Name = "clock time", Flag = "light_clock", Min = 0, Max = 24, Default = 14, Decimals = 0.1,
-    Callback = function(v) LightState.ClockTime = v end })
-LightSection:Slider({ Name = "fog end", Flag = "light_fogend", Min = 0, Max = 100000, Default = 100000, Decimals = 1,
-    Callback = function(v) LightState.FogEnd = v end })
-LightSection:Slider({ Name = "fog start", Flag = "light_fogstart", Min = 0, Max = 5000, Default = 0, Decimals = 1,
-    Callback = function(v) LightState.FogStart = v end })
+        if v then
+            snapshotLighting()
+            applyLighting()
+        else
+            restoreLighting()
+        end
+    end
+})
+
+LightSection:Label({ Name = "ambient" }):Colorpicker({
+    Name = "light_ambient", Flag = "light_ambient",
+    Default = Color3.fromRGB(255, 255, 255),
+    Callback = function(c) LightState.Ambient = c end
+})
+
+LightSection:Label({ Name = "outdoor ambient" }):Colorpicker({
+    Name = "light_outdoor", Flag = "light_outdoor",
+    Default = Color3.fromRGB(255, 255, 255),
+    Callback = function(c) LightState.OutdoorAmbient = c end
+})
+
+LightSection:Slider({
+    Name = "brightness", Flag = "light_bright",
+    Min = 0, Max = 5, Default = 2,
+    Decimals = 0.01,
+    Callback = function(v) LightState.Brightness = v end
+})
+
+LightSection:Slider({
+    Name = "clock time", Flag = "light_clock",
+    Min = 0, Max = 24, Default = 14,
+    Decimals = 0.1,
+    Callback = function(v) LightState.ClockTime = v end
+})
+
+LightSection:Slider({
+    Name = "fog end", Flag = "light_fogend",
+    Min = 0, Max = 100000, Default = 100000,
+    Decimals = 1,
+    Callback = function(v) LightState.FogEnd = v end
+})
+
+LightSection:Slider({
+    Name = "fog start", Flag = "light_fogstart",
+    Min = 0, Max = 5000, Default = 0,
+    Decimals = 1,
+    Callback = function(v) LightState.FogStart = v end
+})
 
 ----------------------------------------------------------------
 -- ATMOSPHERE UI
 ----------------------------------------------------------------
 local AtmSection = Visuals:Section({ Name = "atmosphere", Side = 2 })
-AtmSection:Toggle({ Name = "enabled", Flag = "atm_enabled", Default = false,
+
+AtmSection:Toggle({
+    Name = "enabled", Flag = "atm_enabled", Default = false,
     Callback = function(v)
         if AtmState.Enabled == v then return end
         AtmState.Enabled = v
-        if v then snapshotAtmosphere(); applyAtmosphere() else restoreAtmosphere() end
-    end })
-AtmSection:Slider({ Name = "density", Flag = "atm_density", Min = 0, Max = 1, Default = 0.3, Decimals = 0.01,
-    Callback = function(v) AtmState.Density = v end })
-AtmSection:Slider({ Name = "haze", Flag = "atm_haze", Min = 0, Max = 10, Default = 0, Decimals = 0.01,
-    Callback = function(v) AtmState.Haze = v end })
-AtmSection:Slider({ Name = "glare", Flag = "atm_glare", Min = 0, Max = 10, Default = 0, Decimals = 0.01,
-    Callback = function(v) AtmState.Glare = v end })
-AtmSection:Slider({ Name = "offset", Flag = "atm_offset", Min = -1, Max = 1, Default = 0, Decimals = 0.01,
-    Callback = function(v) AtmState.Offset = v end })
-AtmSection:Label({ Name = "color" }):Colorpicker({ Name = "atm_color", Flag = "atm_color",
-    Default = Color3.fromRGB(199, 199, 199), Callback = function(c) AtmState.Color = c end })
-AtmSection:Label({ Name = "decay" }):Colorpicker({ Name = "atm_decay", Flag = "atm_decay",
-    Default = Color3.fromRGB(106, 112, 125), Callback = function(c) AtmState.Decay = c end })
+        if v then
+            snapshotAtmosphere()
+            applyAtmosphere()
+        else
+            restoreAtmosphere()
+        end
+    end
+})
+
+AtmSection:Slider({
+    Name = "density", Flag = "atm_density",
+    Min = 0, Max = 1, Default = 0.3,
+    Decimals = 0.01,
+    Callback = function(v) AtmState.Density = v end
+})
+
+AtmSection:Slider({
+    Name = "haze", Flag = "atm_haze",
+    Min = 0, Max = 10, Default = 0,
+    Decimals = 0.01,
+    Callback = function(v) AtmState.Haze = v end
+})
+
+AtmSection:Slider({
+    Name = "glare", Flag = "atm_glare",
+    Min = 0, Max = 10, Default = 0,
+    Decimals = 0.01,
+    Callback = function(v) AtmState.Glare = v end
+})
+
+AtmSection:Slider({
+    Name = "offset", Flag = "atm_offset",
+    Min = -1, Max = 1, Default = 0,
+    Decimals = 0.01,
+    Callback = function(v) AtmState.Offset = v end
+})
+
+AtmSection:Label({ Name = "color" }):Colorpicker({
+    Name = "atm_color", Flag = "atm_color",
+    Default = Color3.fromRGB(199, 199, 199),
+    Callback = function(c) AtmState.Color = c end
+})
+
+AtmSection:Label({ Name = "decay" }):Colorpicker({
+    Name = "atm_decay", Flag = "atm_decay",
+    Default = Color3.fromRGB(106, 112, 125),
+    Callback = function(c) AtmState.Decay = c end
+})
 
 ----------------------------------------------------------------
--- CAMERA / FOV UI (fixed)
+-- CAMERA / FOV UI
 ----------------------------------------------------------------
 local CameraSection = Misc:Section({ Name = "camera", Side = 1 })
-CameraSection:Toggle({ Name = "fov lock", Flag = "fov_enabled", Default = false,
+
+CameraSection:Toggle({
+    Name = "fov lock", Flag = "fov_enabled", Default = false,
     Callback = function(v)
         if FOVState.Enabled == v then return end
         FOVState.Enabled = v
         if v then
-            watchCameraFOV(getCamera())
             enforceFOV()
         else
             restoreFOV()
         end
-    end })
-CameraSection:Slider({ Name = "fov", Flag = "fov_value", Min = 40, Max = 120, Default = 120, Decimals = 0.1,
+    end
+})
+
+CameraSection:Slider({
+    Name = "fov", Flag = "fov_value",
+    Min = 40, Max = 300, Default = 120,
+    Decimals = 0.1,
     Callback = function(v)
         FOVState.Value = v
-        if FOVState.Enabled then enforceFOV() end
-    end })
+        enforceFOV()
+    end
+})
 
 ----------------------------------------------------------------
--- SKIN CHANGER BACKEND (no UI)
+-- STRAFE SKIN CHANGER (local viewmodel, native skin assets)
 ----------------------------------------------------------------
 local SkinChanger: any = {
     Enabled = false, AutoCycle = false, CycleInterval = 10, LastCycle = os.clock(),
@@ -1317,13 +1605,20 @@ local SkinChanger: any = {
 }
 
 do
-    function SkinChanger:SetStatus(text) self.Status = text end
+    local HttpService = game:GetService("HttpService")
+
+    function SkinChanger:SetStatus(text)
+        if self.Status == text then return end
+        self.Status = text
+    end
 
     function SkinChanger:GetParts(model)
         local parts = model:FindFirstChild("Parts")
         if parts then return parts end
         local legacy = model:FindFirstChild("Model")
-        if legacy and (legacy:IsA("Model") or legacy:IsA("Folder")) and model:FindFirstChild("GunComponents") then return legacy end
+        if legacy and (legacy:IsA("Model") or legacy:IsA("Folder")) and model:FindFirstChild("GunComponents") then
+            return legacy
+        end
         return nil
     end
 
@@ -1334,14 +1629,16 @@ do
         local managerScript = combat and combat:FindFirstChild("SkinManager")
         local models = ReplicatedStorage:FindFirstChild("Models")
         if not configScript or not managerScript or not models then
-            self:SetStatus("STRAFE skin modules unavailable"); return
+            self:SetStatus("STRAFE skin modules unavailable")
+            return
         end
         local configOK, config = Runtime:Call("skin catalog", require, configScript)
         local managerOK, manager = Runtime:Call("skin manager", require, managerScript)
         if not configOK or not managerOK or type(config) ~= "table" or type(manager) ~= "table"
            or type(config.getSkinsForWeapon) ~= "function" or type(manager.applySkin) ~= "function"
            or type(manager.removeSkin) ~= "function" then
-            self:SetStatus("skin API unavailable"); return
+            self:SetStatus("skin API unavailable")
+            return
         end
         self.Config, self.Manager = config, manager
         for _, model in ipairs(models:GetChildren()) do
@@ -1359,6 +1656,11 @@ do
                     if skin.isStockSkin then entry.StockId = skin.name end
                 end
             end
+            table.sort(entry.Labels, function(a, b)
+                if a == "game equipped" then return b ~= "game equipped" end
+                if b == "game equipped" then return false end
+                return a:lower() < b:lower()
+            end)
             local parts = self:GetParts(model)
             if parts then
                 for _, part in ipairs(parts:GetDescendants()) do
@@ -1371,8 +1673,14 @@ do
         table.sort(self.Weapons)
         local skinsFolder = ReplicatedStorage:FindFirstChild("Skins")
         local knivesFolder = skinsFolder and skinsFolder:FindFirstChild("Knives")
+        local weaponsScript = combat:FindFirstChild("WeaponsConfig")
+        local weaponsOK, weapons
+        if weaponsScript then weaponsOK, weapons = pcall(require, weaponsScript) end
+        self.WeaponDefinitions = weaponsOK and weapons or nil
         for _, weapon in ipairs(self.Weapons) do
             local isKnife = knivesFolder and knivesFolder:FindFirstChild(weapon) ~= nil
+            local definition = self.WeaponDefinitions and self.WeaponDefinitions.getWeapon(weapon)
+            if definition and definition.slotType == "melee" and definition.isEquippable ~= false then isKnife = true end
             if not isKnife and type(config.isKnifePool) == "function" then
                 local ok, result = pcall(config.isKnifePool, weapon)
                 isKnife = ok and result == true
@@ -1390,9 +1698,24 @@ do
         Library.Flags.skin_loadout = HttpService:JSONEncode(self.Selections)
     end
 
+    function SkinChanger:Select(weapon, skinId)
+        local entry = self.Catalog[weapon]
+        if not entry or (skinId and not entry.ById[skinId]) then return false end
+        self.Selections[weapon] = skinId
+        self.LastCycle = os.clock()
+        self:SaveSelectionFlags()
+        self:RequestRefresh()
+        return true
+    end
+
+    function SkinChanger:Restore(model)
+        if model == self.ActiveModel then self.ActiveModel = nil end
+    end
+
     function SkinChanger:RestoreAll()
         self.ActiveModel, self.ActiveWeapon = nil, nil
         self.ActiveParts, self.ActiveModelName = nil, nil
+        self:SetStatus("settings changed; re-equip the weapon to apply")
     end
 
     function SkinChanger:GetModel(vm)
@@ -1429,7 +1752,9 @@ do
         local best, score, tied = nil, 0, false
         for weapon, entry in pairs(self.Catalog) do
             local matches = 0
-            for name, mesh in pairs(entry.Meshes) do if meshes[name] == mesh then matches = matches + 1 end end
+            for name, mesh in pairs(entry.Meshes) do
+                if meshes[name] == mesh then matches = matches + 1 end
+            end
             if matches > score then best, score, tied = weapon, matches, false
             elseif matches == score and matches > 0 then tied = true end
         end
@@ -1440,6 +1765,8 @@ do
         local resolved = type(options) == "table" and table.clone(options) or {}
         local actual = weapon
         local inventory = self.Inventory
+        local agents = inventory and inventory.Agents
+        if agents and agents.Enabled and agents.Selected then resolved.characterName = agents.Selected end
         if inventory and inventory.Enabled then
             local loadout = inventory.State.getLoadout()
             local knifeType = inventory.LocalLoadout.melee or loadout.melee
@@ -1448,7 +1775,9 @@ do
             if equipped == nil then equipped = inventory.State.getEquippedSkinForWeapon(actual) end
             if equipped == nil and actual ~= weapon then equipped = inventory.LocalEquipped[weapon] end
             local item = equipped and inventory.ById[equipped]
-            resolved.skinName = item and item.skinName or (self.Catalog[actual] and self.Catalog[actual].StockId)
+            if item and item.weaponName ~= actual then item = nil end
+            local catalog = self.Catalog[actual]
+            resolved.skinName = item and item.skinName or (catalog and (catalog.StockId or catalog.Ids[1]))
             local gloveType = inventory.LocalLoadout.gloves or loadout.gloves or "Default"
             if not self.Gloves.Catalog[gloveType] then gloveType = "Default" end
             local entry = self.Gloves.Catalog[gloveType]
@@ -1462,7 +1791,8 @@ do
             resolved._VergilBareHands = entry and entry.Bare or nil
             return actual, resolved, self.Knife.TypeSet[weapon] == true, true
         end
-        local overrideKnife = self.Knife.Enabled and self.Knife.TypeSet[weapon] and self.Knife.TypeSet[self.Knife.Type]
+        local overrideKnife = self.Knife.Enabled and self.Knife.TypeSet[weapon]
+            and self.Knife.TypeSet[self.Knife.Type]
         if overrideKnife then
             actual = self.Knife.Type
             resolved.skinName = self.Knife.Choices[actual] or (self.Catalog[actual] and self.Catalog[actual].StockId)
@@ -1492,12 +1822,24 @@ do
             local scanned, values = pcall(getupvalues, rig.build)
             if scanned then
                 for _, value in pairs(values) do
-                    if type(value) == "function" and debug.info(value, "n") == "weldToHandle" then self.NativeWeld = value
-                    elseif type(value) == "table" and type(rawget(value, "swapArmsOnModel")) == "function" then self.NativeSwapArms = value.swapArmsOnModel end
+                    if type(value) == "function" and debug.info(value, "n") == "weldToHandle" then
+                        self.NativeWeld = value
+                    elseif type(value) == "table" and type(rawget(value, "swapArmsOnModel")) == "function" then
+                        self.NativeSwapArms = value.swapArmsOnModel
+                    end
                 end
             end
         end
         self.NativeReady = Runtime:Hook("native skin builder", rig.build, function(original, weapon, options)
+            if self.AutoCycle and self.Enabled and not (self.Knife.Enabled and self.Knife.TypeSet[weapon])
+               and os.clock() - self.LastCycle >= self.CycleInterval then
+                local entry = self.Catalog[weapon]
+                if entry and #entry.Ids > 0 then
+                    self.Selections[weapon] = entry.Ids[math.random(1, #entry.Ids)]
+                    self.LastCycle = os.clock()
+                    Library.Flags.skin_loadout = HttpService:JSONEncode(self.Selections)
+                end
+            end
             local actual, resolved, knifeOverride, gloveOverride = self:ResolveOptions(weapon, options)
             local result = original(actual, resolved)
             if type(result) == "table" and typeof(result.gunModel) == "Instance" then
@@ -1556,7 +1898,9 @@ do
                     local arms = result.gunModel:FindFirstChild("Arms")
                     if arms then
                         for _, object in ipairs(arms:GetDescendants()) do
-                            if object.Name == "Glove" and (object:IsA("BasePart") or object:IsA("JointInstance")) then object:Destroy() end
+                            if object.Name == "Glove" and (object:IsA("BasePart") or object:IsA("JointInstance")) then
+                                object:Destroy()
+                            end
                         end
                     end
                 end
@@ -1564,7 +1908,9 @@ do
                     BaseWeapon = weapon, Weapon = actual, Applied = resolved.skinName,
                     KnifeOverride = knifeOverride, GloveOverride = gloveOverride,
                     GloveType = resolved.gloveType, GloveVariant = resolved.gloveVariant,
-                    Bare = resolved._VergilBareHands, VM = result.viewmodel, OriginalOptions = options,
+                    CharacterName = resolved.characterName,
+                    Bare = resolved._VergilBareHands,
+                    VM = result.viewmodel, OriginalOptions = options,
                     HasSkin = knifeOverride or (inventoryActive and resolved.skinName ~= nil)
                         or (self.Enabled and self.Selections[weapon] ~= nil),
                 }
@@ -1592,12 +1938,15 @@ do
             end
             return original(model, id, ...)
         end)
+        if self.NativeReady then self:SetStatus("native models ready; equip/re-equip to apply") end
     end
 
     function SkinChanger:LiveOptions(model, weapon)
         local loadout = self.Inventory and self.Inventory.State.getLoadout() or {}
         return {
             hasArms = true, skinName = model:GetAttribute("AppliedSkinName"), emissive = "static",
+            characterName = self.Inventory and self.Inventory.Agents and self.Inventory.Agents.Enabled
+                and self.Inventory.Agents.Selected or nil,
             gloveType = loadout.gloves or "Default", gloveVariant = "Stock",
         }
     end
@@ -1611,7 +1960,10 @@ do
         for _, part in ipairs(vm:GetDescendants()) do
             if part:IsA("BasePart") and Backups[part] then restorePart(part) end
             local hidden = ArmHideBackups[part]
-            if hidden then part.Transparency, part.LocalTransparencyModifier = hidden.Transparency, hidden.Modifier; ArmHideBackups[part] = nil end
+            if hidden then
+                part.Transparency, part.LocalTransparencyModifier = hidden.Transparency, hidden.Modifier
+                ArmHideBackups[part] = nil
+            end
         end
         local alignment = root.CFrame * sourceRoot.CFrame:Inverse()
         local positioned = {}
@@ -1624,13 +1976,17 @@ do
             end
         end
         local rootJoints = {}
-        for _, child in ipairs(sourceRoot:GetChildren()) do if child:IsA("Motor6D") then rootJoints[#rootJoints + 1] = child end end
+        for _, child in ipairs(sourceRoot:GetChildren()) do
+            if child:IsA("Motor6D") then rootJoints[#rootJoints + 1] = child end
+        end
         for _, child in ipairs(model:GetChildren()) do if child ~= root then child:Destroy() end end
         if vm ~= model then
             for _, child in ipairs(vm:GetChildren()) do if child ~= model and child ~= root then child:Destroy() end end
         end
         for _, child in ipairs(sourceModel:GetChildren()) do
-            if child ~= sourceRoot then child.Parent = child:IsA("AnimationController") and vm or model end
+            if child ~= sourceRoot then
+                child.Parent = child:IsA("AnimationController") and vm or model
+            end
         end
         if sourceVM ~= sourceModel then
             for _, child in ipairs(sourceVM:GetChildren()) do
@@ -1647,8 +2003,10 @@ do
             for key, value in pairs(incoming:GetAttributes()) do motor:SetAttribute(key, value) end
             retained[motor] = true
         end
-        for _, child in ipairs(root:GetChildren()) do if child:IsA("Motor6D") and not retained[child] then child:Destroy() end end
-        for _, name in ipairs({ "AppliedSkinName", "CustomSoundId", "CustomSoundVolume" }) do
+        for _, child in ipairs(root:GetChildren()) do
+            if child:IsA("Motor6D") and not retained[child] then child:Destroy() end
+        end
+        for _, name in ipairs({"AppliedSkinName", "CustomSoundId", "CustomSoundVolume"}) do
             model:SetAttribute(name, sourceModel:GetAttribute(name))
         end
         vm.PrimaryPart = root
@@ -1721,12 +2079,13 @@ do
         local actual, desired = self:ResolveOptions(weapon, self:LiveOptions(model, weapon))
         local old = self.Records[model]
         if old and old.Weapon == actual and old.Applied == desired.skinName and old.GloveType == desired.gloveType
-            and old.GloveVariant == desired.gloveVariant and old.Bare == desired._VergilBareHands then return true end
+            and old.GloveVariant == desired.gloveVariant and old.Bare == desired._VergilBareHands
+            and old.CharacterName == desired.characterName then return true end
         local ammo = controller.currentAmmo
         if controller.stopShooting then controller:stopShooting() end
         if controller.cancelReload then controller:cancelReload() end
         if controller.viewmodelAnimator and controller.viewmodelAnimator.Destroy then controller.viewmodelAnimator:Destroy() end
-        for _, key in ipairs({ "relicUnsubscribeEquipped", "relicUnsubscribeOverride", "attachmentUnsubscribe", "armsSettingUnsubscribe", "viewmodelSettingUnsubscribe" }) do
+        for _, key in ipairs({"relicUnsubscribeEquipped", "relicUnsubscribeOverride", "attachmentUnsubscribe", "armsSettingUnsubscribe", "viewmodelSettingUnsubscribe"}) do
             if type(controller[key]) == "function" then controller[key](); controller[key] = nil end
         end
         local module = self:BuildLive(weapon, vm, model, root)
@@ -1750,10 +2109,23 @@ do
         end)
     end
 
+    function SkinChanger:Randomize(weapon)
+        local entry = self.Catalog[weapon]
+        if not entry or #entry.Ids == 0 then return end
+        local choices = {}
+        for _, id in ipairs(entry.Ids) do
+            if id ~= self.Selections[weapon] then table.insert(choices, id) end
+        end
+        if #choices == 0 then choices = entry.Ids end
+        self:Select(weapon, choices[math.random(1, #choices)])
+    end
+
     function SkinChanger:Step(vm)
         if not vm then self.ActiveModel = nil; return false end
         local model = self:GetModel(vm)
-        if not model then return false end
+        if not model then
+            return false
+        end
         self.ActiveModel = model
         if os.clock() - (self.LastPrune or 0) >= 1 then
             self.LastPrune = os.clock()
@@ -1781,7 +2153,8 @@ do
     Library.SetFlags.skin_loadout = function(value)
         local ok, decoded = pcall(HttpService.JSONDecode, HttpService, tostring(value))
         if not ok or type(decoded) ~= "table" then
-            Runtime:Notify("Invalid skin loadout in config"); return
+            Runtime:Notify("Invalid skin loadout in config")
+            return
         end
         local selections = {}
         for weapon, id in pairs(decoded) do
@@ -1800,12 +2173,53 @@ do
 end
 
 ----------------------------------------------------------------
--- LOCAL GLOVES BACKEND (no UI)
+-- ANY LOCAL KNIFE: independent of the owned/equipped knife type
 ----------------------------------------------------------------
 do
+    local HttpService = game:GetService("HttpService")
+    local knife = SkinChanger.Knife
+
+    function SkinChanger:SelectKnife(kind, id)
+        local entry = self.Catalog[kind]
+        if not self.Knife.TypeSet[kind] or (id and not entry.ById[id]) then return false end
+        if id == entry.StockId then id = nil end
+        self.Knife.Choices[kind] = id
+        Library.Flags.knife_loadout = HttpService:JSONEncode(self.Knife.Choices)
+        self:RequestRefresh()
+        return true
+    end
+
+    Library.Flags.knife_loadout = "{}"
+    Library.SetFlags.knife_loadout = function(value)
+        local ok, decoded = pcall(HttpService.JSONDecode, HttpService, tostring(value))
+        if not ok or type(decoded) ~= "table" then
+            Runtime:Notify("Invalid knife loadout in config")
+            return
+        end
+        local choices = {}
+        for kind, id in pairs(decoded) do
+            local entry = SkinChanger.Catalog[kind]
+            if knife.TypeSet[kind] and type(id) == "string" and entry.ById[id] and id ~= entry.StockId then
+                choices[kind] = id
+            end
+        end
+        knife.Choices = choices
+        Library.Flags.knife_loadout = HttpService:JSONEncode(choices)
+        SkinChanger:RequestRefresh()
+    end
+end
+
+----------------------------------------------------------------
+-- LOCAL GLOVES: passed directly to the game's native rig builder
+----------------------------------------------------------------
+do
+    local HttpService = game:GetService("HttpService")
     local gloves = SkinChanger.Gloves
 
-    function gloves:SetStatus(text) self.Status = text end
+    function gloves:SetStatus(text)
+        if self.Status == text then return end
+        self.Status = text
+    end
 
     function gloves:Initialize()
         local templates = ReplicatedStorage:FindFirstChild("Arms")
@@ -1867,16 +2281,50 @@ do
         self:SetStatus("ready; enable to replace your gloves locally")
     end
 
-    function gloves:Restore() self.Record = nil end
+    function gloves:Select(kind, id)
+        local entry = self.Catalog[kind]
+        if not entry or not entry.Variants[id] then return false end
+        self.Choices[kind] = id
+        Library.Flags.glove_loadout = HttpService:JSONEncode(self.Choices)
+        SkinChanger:RequestRefresh()
+        return true
+    end
+
+    function gloves:FindHands(vm)
+        local model = SkinChanger:GetModel(vm)
+        local arms = (model and model:FindFirstChild("Arms")) or vm:FindFirstChild("Arms")
+        local root = vm:FindFirstChild("HumanoidRootPart")
+        local sources = {}
+        for _, side in ipairs({ "LeftArm", "RightArm" }) do
+            local arm = arms and arms:FindFirstChild(side)
+            if not arm and root then
+                local motor = root:FindFirstChild(side)
+                if motor and motor:IsA("Motor6D") then arm = motor.Part1 end
+            end
+            if arm and arm:IsA("BasePart") then sources[side] = arm end
+        end
+        return sources
+    end
+
+    function gloves:Restore()
+        self.Record = nil
+        self:SetStatus("settings changed; re-equip to apply")
+    end
+
+    function gloves:Owns(part)
+        return self.Record ~= nil and part:IsDescendantOf(self.Record.Model)
+    end
 
     function gloves:Step(vm)
         local model = vm and SkinChanger:GetModel(vm)
         local native = model and SkinChanger.Records[model]
         if not native or not native.GloveOverride then
             self.Record = nil
+            self:SetStatus(self.Enabled and "re-equip to apply native gloves" or "glove override off")
             return false
         end
         self.Record = { Model = model, Kind = native.Bare and "bare hands" or native.GloveType, Variant = native.GloveVariant }
+        self:SetStatus(self.Record.Kind .. ": " .. (native.GloveVariant or "Stock") .. " [native rig]")
         return true
     end
 
@@ -1892,14 +2340,14 @@ do
         end
         gloves.Choices = choices
         Library.Flags.glove_loadout = HttpService:JSONEncode(choices)
+        SkinChanger:RequestRefresh()
     end
-
     table.insert(Runtime.Cleaners, function() gloves.Enabled = false; gloves:Restore() end)
     SkinChanger:InstallNativeBuilder()
 end
 
 ----------------------------------------------------------------
--- LOCAL INVENTORY: unlock cosmetics (moved to Misc)
+-- LOCAL INVENTORY: use STRAFE's normal inventory and loadout UI
 ----------------------------------------------------------------
 local LocalInventory: any = {
     Enabled = false, Entries = {}, ById = {}, BySkin = {}, LocalEquipped = {}, LocalLoadout = {},
@@ -1908,7 +2356,8 @@ local LocalInventory: any = {
 SkinChanger.Inventory = LocalInventory
 
 do
-    local section = Misc:Section({ Name = "unlock cosmetics", Side = 1 })
+    local HttpService = game:GetService("HttpService")
+    local section = Misc:Section({ Name = "game inventory unlocks", Side = 1 })
     local label = section:Label({ Name = "loading local inventory" })
     local classes = ReplicatedStorage:FindFirstChild("Classes")
     local react = classes and classes:FindFirstChild("UserInterface")
@@ -1972,7 +2421,7 @@ do
 
     function LocalInventory:MergeTypes(incoming, added)
         local result, seen = {}, {}
-        for _, list in ipairs({ type(incoming) == "table" and incoming or {}, added }) do
+        for _, list in ipairs({type(incoming) == "table" and incoming or {}, added}) do
             for _, name in ipairs(list) do
                 if type(name) == "string" and not seen[name] then result[#result + 1] = name; seen[name] = true end
             end
@@ -2008,8 +2457,9 @@ do
         Runtime:NativeCall("publish local skin inventory", self.State.setSkinInventory, self:MergeSkins(self.ServerSkins), tick())
         Runtime:NativeCall("publish local knives", self.State.setUnlockedWeapons, self:MergeTypes(self.ServerWeapons, SkinChanger.Knife.Types))
         Runtime:NativeCall("publish knife ownership", self.State.setUnlockedKnives, self:MergeTypes(self.ServerKnives, SkinChanger.Knife.Types), tick())
-        Runtime:NativeCall("publish local gloves", self.State.setUnlockedGloves, self:MergeTypes(self.ServerGloves, { "Default", "Bandages", "FloraciteGloves" }), tick())
-        Runtime:NativeCall("publish local loadout", self.State.setLoadout, self:MergeLoadout(self.ServerLoadout))
+        Runtime:NativeCall("publish local gloves", self.State.setUnlockedGloves, self:MergeTypes(self.ServerGloves, {"Default", "Bandages", "FloraciteGloves"}), tick())
+        local loadout = self:MergeLoadout(self.ServerLoadout)
+        Runtime:NativeCall("publish local loadout", self.State.setLoadout, loadout)
         Runtime:NativeCall("publish local equipped skins", self.State.setEquippedSkins, self:MergeEquipped(self.ServerEquipped), tick())
         self.Publishing = false
         label:SetText(string.format("%d skins | %d knife types | local inventory", #self.Entries, #SkinChanger.Knife.Types))
@@ -2019,11 +2469,16 @@ do
         if self.Enabled == enabled then return end
         if not self.State then Runtime:Notify("Inventory state is unavailable"); return end
         if enabled then
-            self.ServerSkins = table.clone(self.State.getSkinInventory() or {})
-            self.ServerWeapons = table.clone(self.State.getUnlockedWeapons() or {})
-            self.ServerKnives = table.clone(self.State.getUnlockedKnives() or {})
-            self.ServerGloves = table.clone(self.State.getUnlockedGloves() or {})
-            self.ServerEquipped = table.clone(self.State.getEquippedSkins() or {})
+            local skins = self.State.getSkinInventory()
+            local weapons = self.State.getUnlockedWeapons()
+            local knives = self.State.getUnlockedKnives()
+            local gloves = self.State.getUnlockedGloves()
+            local equipped = self.State.getEquippedSkins()
+            self.ServerSkins = table.clone(skins or {})
+            self.ServerWeapons = table.clone(weapons or {})
+            self.ServerKnives = table.clone(knives or {})
+            self.ServerGloves = table.clone(gloves or {})
+            self.ServerEquipped = table.clone(equipped or {})
             self.ServerLoadout = self.State.getLoadout()
             self.Enabled = true
             self:Publish()
@@ -2088,7 +2543,7 @@ do
             Runtime:Spawn("update local game loadout", function()
                 if type(setthreadidentity) == "function" then pcall(setthreadidentity, 8) end
                 if not self.Enabled then return end
-                for _, key in ipairs({ "melee", "gloves" }) do
+                for _, key in ipairs({"melee", "gloves"}) do
                     if payload[key] ~= nil then self.LocalLoadout[key] = payload[key] end
                 end
                 self:NormalizeOverlay()
@@ -2123,6 +2578,12 @@ do
     if LocalInventory.State and SkinChanger.Config then
         LocalInventory:BuildCatalog()
         local gs = LocalInventory.State
+        if type(SkinChanger.Config.isKnifePool) == "function" then
+            Runtime:Hook("seasonal knife pool", SkinChanger.Config.isKnifePool, function(original, pool, ...)
+                if LocalInventory.Enabled and pool == "halloweenKnives" then return true end
+                return original(pool, ...)
+            end)
+        end
         Runtime:Hook("local inventory skins", gs.setSkinInventory, function(original, incoming, timestamp)
             if LocalInventory.Enabled then
                 if not LocalInventory.Publishing then
@@ -2157,7 +2618,7 @@ do
         Runtime:Hook("local inventory gloves", gs.setUnlockedGloves, function(original, incoming, timestamp)
             if LocalInventory.Enabled then
                 if not LocalInventory.Publishing then LocalInventory.ServerGloves = table.clone(incoming or {}) end
-                incoming = LocalInventory:MergeTypes(incoming, { "Default", "Bandages", "FloraciteGloves" })
+                incoming = LocalInventory:MergeTypes(incoming, {"Default", "Bandages", "FloraciteGloves"})
                 timestamp = math.max(tonumber(timestamp) or 0, tick())
             end
             return original(incoming, timestamp)
@@ -2185,9 +2646,13 @@ do
             local original, wrapper
             local remotesFolder = ReplicatedStorage:FindFirstChild("Remotes")
             wrapper = function(remote, ...)
-                if not Runtime.Unloaded and getnamecallmethod() == "FireServer" and typeof(remote) == "Instance"
-                    and remote.Parent == remotesFolder then
-                    if LocalInventory:HandleRemote(remote, table.pack(...)) then return end
+                if not Runtime.Unloaded and typeof(remote) == "Instance" and remote.Parent == remotesFolder then
+                    local method = getnamecallmethod()
+                    if method == "FireServer" then
+                        if LocalInventory:HandleRemote(remote, table.pack(...)) then return end
+                    elseif method == "InvokeServer" and remote.Name == "EquipCharacter" and LocalInventory.Agents and LocalInventory.Agents.Enabled then
+                        return LocalInventory.Agents:Equip(...)
+                    end
                 end
                 return original(remote, ...)
             end
@@ -2227,18 +2692,16 @@ do
             local valid, decoded = pcall(HttpService.JSONDecode, HttpService, tostring(value))
             if not valid or type(decoded) ~= "table" then return end
             LocalInventory.LocalLoadout = {}
-            for _, key in ipairs({ "melee", "gloves" }) do
+            for _, key in ipairs({"melee", "gloves"}) do
                 if type(decoded[key]) == "string" then LocalInventory.LocalLoadout[key] = decoded[key] end
             end
             LocalInventory:SaveChoices()
             LocalInventory:Publish()
             SkinChanger:RequestRefresh()
         end
-        section:Toggle({ Name = "enabled", Flag = "inventory_local", Default = false,
+        section:Toggle({ Name = "unlock cosmetics in game inventory locally", Flag = "inventory_local", Default = true,
             Callback = function(value) LocalInventory:SetEnabled(value) end })
         section:Button({ Name = "refresh local inventory", Callback = function() LocalInventory:Publish(); SkinChanger:RequestRefresh() end })
-        section:Label({ Name = "Choose skins in STRAFE's inventory / loadout" })
-        section:Label({ Name = "Local session cosmetics; account ownership is unchanged" })
         table.insert(Runtime.Cleaners, function() LocalInventory:SetEnabled(false) end)
     else
         label:SetText("game inventory state unavailable")
@@ -2246,10 +2709,98 @@ do
 end
 
 ----------------------------------------------------------------
--- WEAPON MODIFIERS
+-- LOCAL AGENTS: native agent ownership and equip state
+----------------------------------------------------------------
+do
+    local gs = LocalInventory.State
+    local folder = ReplicatedStorage.Classes:FindFirstChild("Characters")
+    local agents: any = { Enabled = false, Names = {}, Set = {}, Selected = nil, Publishing = false }
+    LocalInventory.Agents = agents
+    local section = Misc:Section({ Name = "local agents", Side = 2 })
+    if gs and folder then
+        local config = require(folder.CharactersConfig)
+        local applier = require(folder.CharacterApplier)
+        for _, character in ipairs(config.ROSTER or {}) do
+            if type(character.name) == "string" then agents.Names[#agents.Names + 1] = character.name; agents.Set[character.name] = true end
+        end
+        table.sort(agents.Names)
+        function agents:Merge(data)
+            local result = table.clone(data or {})
+            result.owned = LocalInventory:MergeTypes(result.owned, self.Names)
+            result.equipped = self.Selected or result.equipped
+            result.isLoaded = true
+            return result
+        end
+        function agents:Equip(name)
+            if not self.Enabled or not self.Set[name] then return {success = false, reason = "Unknown agent"} end
+            self.Selected = name
+            Library.Flags.agent_selected = name
+            local current = gs.getCharacterState()
+            self.Publishing = true
+            Runtime:NativeCall("equip local agent state", gs.setCharacterState, self:Merge(current))
+            self.Publishing = false
+            local character = LocalPlayer.Character
+            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+            if humanoid and humanoid.Health > 0 then Runtime:NativeCall("apply local agent", applier.applyTo, character, name) end
+            SkinChanger:RequestRefresh()
+            return {success = true, equipped = name, characterName = name}
+        end
+        function agents:SetEnabled(value)
+            if self.Enabled == value then return end
+            if value then
+                local current = gs.getCharacterState()
+                self.Original = {equipped = current.equipped, owned = table.clone(current.owned or {}), isLoaded = current.isLoaded}
+                self.Enabled = true
+                self.Publishing = true
+                Runtime:NativeCall("publish local agents", gs.setCharacterState, self:Merge(current))
+                self.Publishing = false
+                if self.Selected then self:Equip(self.Selected) end
+            else
+                self.Enabled = false
+                if self.Original then Runtime:NativeCall("restore agent inventory", gs.setCharacterState, self.Original) end
+                local character = LocalPlayer.Character
+                if character and self.Original and self.Original.equipped then
+                    Runtime:NativeCall("restore agent appearance", applier.applyTo, character, self.Original.equipped)
+                end
+            end
+            SkinChanger:RequestRefresh()
+        end
+        Runtime:Hook("local agent inventory", gs.setCharacterState, function(original, incoming)
+            if agents.Enabled then
+                if not agents.Publishing and incoming then
+                    if incoming.owned then agents.Original.owned = table.clone(incoming.owned) end
+                    if incoming.equipped then agents.Original.equipped = incoming.equipped end
+                    if incoming.isLoaded ~= nil then agents.Original.isLoaded = incoming.isLoaded end
+                end
+                incoming = agents:Merge(incoming)
+            end
+            return original(incoming)
+        end)
+        Runtime:Connect(LocalPlayer.CharacterAdded, "restore selected local agent", function(character)
+            Runtime:Spawn("apply respawned local agent", function()
+                local humanoid = character:WaitForChild("Humanoid", 5)
+                if agents.Enabled and agents.Selected and humanoid and character == LocalPlayer.Character then
+                    Runtime:NativeCall("apply respawned agent", applier.applyTo, character, agents.Selected)
+                end
+            end)
+        end)
+        Library.Flags.agent_selected = ""
+        Library.SetFlags.agent_selected = function(name)
+            if name == "" then agents.Selected = nil; Library.Flags.agent_selected = ""
+            elseif agents.Set[name] then agents.Selected = name; Library.Flags.agent_selected = name; if agents.Enabled then agents:Equip(name) end end
+        end
+        section:Toggle({Name = "unlock all agents locally", Flag = "agents_local", Default = true, Callback = function(value) agents:SetEnabled(value) end})
+        table.insert(Runtime.Cleaners, function() agents:SetEnabled(false) end)
+    else
+        section:Label({Name = "Agent modules unavailable"})
+    end
+end
+
+----------------------------------------------------------------
+-- WEAPON MODIFIERS: native recoil controllers and spread helpers
 ----------------------------------------------------------------
 local WeaponMods: any = {
-    NoRecoil = false, NoSpread = false, Shotguns = false, FastReload = false,
+    NoRecoil = false, NoSpread = false, Shotguns = false, FastReload = false, NoBlastCooldown = false,
     Configs = {}, SpreadBackups = {}, DirectionHooks = {}, DirectionFunctions = {}, Status = "loading",
 }
 
@@ -2271,6 +2822,29 @@ do
     WeaponMods.BodyRecoil = WeaponMods:LoadModule("RecoilController")
     WeaponMods.CameraRecoil = WeaponMods:LoadModule("CameraRecoilController")
     WeaponMods.ReloadManager = WeaponMods:LoadModule("ReloadManager")
+    WeaponMods.Handler = require(ReplicatedStorage.Classes.Handler)
+    if type(WeaponMods.Handler.canBlast) == "function" then
+        function WeaponMods:ClearBlastCooldown(controller)
+            if not controller or controller.player ~= LocalPlayer then return end
+            local tracker = controller.blastCooldownTracker
+            if type(tracker) == "table" then
+                tracker.lastBlastTime = -math.huge
+                tracker.isCooldownActive = false
+                tracker.cooldownStartTime = 0
+                tracker.cooldownDuration = 0
+            end
+            controller.lastBlastTime = -math.huge
+        end
+        WeaponMods.BlastHook = Runtime:Hook("local Blast cooldown", WeaponMods.Handler.canBlast, function(original, controller, ...)
+            if WeaponMods.NoBlastCooldown then WeaponMods:ClearBlastCooldown(controller) end
+            return original(controller, ...)
+        end)
+        Runtime:Hook("reset Blast after firing", WeaponMods.Handler.fireBlast, function(original, controller, ...)
+            local results = table.pack(original(controller, ...))
+            if WeaponMods.NoBlastCooldown then WeaponMods:ClearBlastCooldown(controller) end
+            return table.unpack(results, 1, results.n)
+        end)
+    end
     local modules = ReplicatedStorage:FindFirstChild("GunModules")
     if modules then
         for _, module in ipairs(modules:GetChildren()) do
@@ -2328,7 +2902,7 @@ do
         if type(module.update) == "function" then
             Runtime:Hook("weapon recoil spring", module.update, function(original, controller, ...)
                 if WeaponMods.NoRecoil then
-                    for _, key in ipairs({ "gunRecoilSpring", "rotationRecoilSpring", "shotTwistSpring", "spring" }) do
+                    for _, key in ipairs({"gunRecoilSpring", "rotationRecoilSpring", "shotTwistSpring", "spring"}) do
                         WeaponMods:ClearSpring(controller[key])
                     end
                 end
@@ -2400,6 +2974,13 @@ do
         Callback = function(v) WeaponMods.Shotguns = v; WeaponMods:UpdateSpread() end })
     section:Toggle({ Name = "fast reload", Flag = "weapon_fast_reload", Default = false,
         Callback = function(v) WeaponMods.FastReload = v end })
+    section:Toggle({ Name = "no Blast cooldown", Flag = "weapon_no_blast_cooldown", Default = true,
+        Callback = function(v)
+            WeaponMods.NoBlastCooldown = v
+            if v and WeaponMods.ClearBlastCooldown then
+                for _, controller in pairs(SkinChanger.LiveControllers) do WeaponMods:ClearBlastCooldown(controller) end
+            end
+        end })
 
     Runtime:Spawn("spread helper discovery", function()
         while not Runtime.Unloaded do
@@ -2414,7 +2995,7 @@ do
         end
     end)
     table.insert(Runtime.Cleaners, function()
-        WeaponMods.NoRecoil, WeaponMods.NoSpread, WeaponMods.FastReload = false, false, false
+        WeaponMods.NoRecoil, WeaponMods.NoSpread, WeaponMods.FastReload, WeaponMods.NoBlastCooldown = false, false, false, false
         WeaponMods:UpdateSpread()
     end)
 end
@@ -2423,42 +3004,85 @@ end
 -- GUN / ARMS
 ----------------------------------------------------------------
 local GunSection = Misc:Section({ Name = "gun model changer", Side = 1 })
+
 GunSection:Toggle({ Name = "enabled", Flag = "gun_changer", Default = true,
-    Callback = function(v) GunState.Enabled = v; if not v then restoreGroup("parts") end end })
-GunSection:Dropdown({ Name = "material", Flag = "gun_material", Items = { "Neon", "ForceField" }, Default = "Neon",
+    Callback = function(v)
+        GunState.Enabled = v
+        if not v then restoreGroup("parts") end
+    end })
+
+GunSection:Dropdown({ Name = "material", Flag = "gun_material",
+    Items = { "Neon", "ForceField" }, Default = "Neon",
     Callback = function(v) GunState.Material = Enum.Material[v] or Enum.Material.Neon end })
-GunSection:Label({ Name = "color" }):Colorpicker({ Name = "gun_color", Flag = "gun_color",
-    Default = Color3.fromRGB(255, 255, 255), Callback = function(c) GunState.Color = c end })
+
+GunSection:Label({ Name = "color" }):Colorpicker({
+    Name = "gun_color", Flag = "gun_color",
+    Default = Color3.fromRGB(255,255,255),
+    Callback = function(c) GunState.Color = c end })
 
 local ArmsSection = Misc:Section({ Name = "arms", Side = 2 })
+
 ArmsSection:Toggle({ Name = "hide arms", Flag = "hide_arms", Default = false,
     Callback = function(v) ArmsState.Hide = v end })
-ArmsSection:Toggle({ Name = "arms model changer", Flag = "arms_changer", Default = true,
-    Callback = function(v) ArmsState.Enabled = v; if not v then restoreGroup("arms") end end })
-ArmsSection:Dropdown({ Name = "arms material", Flag = "arms_material", Items = { "Neon", "ForceField" }, Default = "Neon",
-    Callback = function(v) ArmsState.Material = Enum.Material[v] or Enum.Material.Neon end })
-ArmsSection:Label({ Name = "arms color" }):Colorpicker({ Name = "arms_color", Flag = "arms_color",
-    Default = Color3.fromRGB(255, 255, 255), Callback = function(c) ArmsState.Color = c end })
 
-----------------------------------------------------------------
--- RADAR
-----------------------------------------------------------------
-local RadarState = { Enabled = false, Size = 180, Range = 250, TeamCheck = true }
+ArmsSection:Toggle({ Name = "arms model changer", Flag = "arms_changer", Default = true,
+    Callback = function(v)
+        ArmsState.Enabled = v
+        if not v then restoreGroup("arms") end
+    end })
+
+ArmsSection:Dropdown({ Name = "arms material", Flag = "arms_material",
+    Items = { "Neon", "ForceField" }, Default = "Neon",
+    Callback = function(v) ArmsState.Material = Enum.Material[v] or Enum.Material.Neon end })
+
+ArmsSection:Label({ Name = "arms color" }):Colorpicker({
+    Name = "arms_color", Flag = "arms_color",
+    Default = Color3.fromRGB(255,255,255),
+    Callback = function(c) ArmsState.Color = c end })
+
+local RadarState = {
+    Enabled = false,
+    Size = 180,
+    Range = 250,
+    TeamCheck = true,
+}
 
 local radarGui = mk("ScreenGui", guiParent, {
-    Name = "VergilRadar", IgnoreGuiInset = true, ResetOnSpawn = false,
-    DisplayOrder = 9997, ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+    Name = "VergilRadar",
+    IgnoreGuiInset = true,
+    ResetOnSpawn = false,
+    DisplayOrder = 9997,
+    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 })
+
 local radarFrame = mk("Frame", radarGui, {
-    AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -20, 1, -20),
+    AnchorPoint = Vector2.new(1, 1),
+    Position = UDim2.new(1, -20, 1, -20),
     Size = UDim2.fromOffset(RadarState.Size, RadarState.Size),
-    BackgroundColor3 = Color3.fromRGB(8, 10, 16), BackgroundTransparency = 0.35,
-    BorderSizePixel = 0, Visible = false,
+    BackgroundColor3 = Color3.fromRGB(8, 10, 16),
+    BackgroundTransparency = 0.35,
+    BorderSizePixel = 0,
+    Visible = false,
 })
 mk("UICorner", radarFrame, { CornerRadius = UDim.new(0.5, 0) })
-mk("UIStroke", radarFrame, { Color = Color3.fromRGB(0, 220, 255), Transparency = 0.55 })
-mk("Frame", radarFrame, { Position = UDim2.new(0.5, 0, 0, 0), Size = UDim2.new(0, 1, 1, 0), BackgroundColor3 = Color3.fromRGB(0, 220, 255), BackgroundTransparency = 0.82, BorderSizePixel = 0 })
-mk("Frame", radarFrame, { Position = UDim2.new(0, 0, 0.5, 0), Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = Color3.fromRGB(0, 220, 255), BackgroundTransparency = 0.82, BorderSizePixel = 0 })
+mk("UIStroke", radarFrame, {
+    Color = Color3.fromRGB(0, 220, 255),
+    Transparency = 0.55,
+})
+mk("Frame", radarFrame, {
+    Position = UDim2.new(0.5, 0, 0, 0),
+    Size = UDim2.new(0, 1, 1, 0),
+    BackgroundColor3 = Color3.fromRGB(0, 220, 255),
+    BackgroundTransparency = 0.82,
+    BorderSizePixel = 0,
+})
+mk("Frame", radarFrame, {
+    Position = UDim2.new(0, 0, 0.5, 0),
+    Size = UDim2.new(1, 0, 0, 1),
+    BackgroundColor3 = Color3.fromRGB(0, 220, 255),
+    BackgroundTransparency = 0.82,
+    BorderSizePixel = 0,
+})
 local radarDots = {}
 
 local function updateRadar()
@@ -2466,22 +3090,30 @@ local function updateRadar()
         if radarFrame.Visible then radarFrame.Visible = false end
         return
     end
+
     local cam = getCamera()
     local lpChar = LocalPlayer.Character
     local lpRoot = lpChar and lpChar:FindFirstChild("HumanoidRootPart")
-    if not cam or not lpRoot then radarFrame.Visible = false; return end
+    if not cam or not lpRoot then
+        radarFrame.Visible = false
+        return
+    end
+
     radarFrame.Visible = true
     radarFrame.Size = UDim2.fromOffset(RadarState.Size, RadarState.Size)
     local radius = RadarState.Size / 2 - 10
     local center = Vector2.new(RadarState.Size / 2, RadarState.Size / 2)
+
     local cf = cam.CFrame
     local forward = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
     local right = Vector3.new(cf.RightVector.X, 0, cf.RightVector.Z)
     forward = forward.Magnitude > 0.01 and forward.Unit or Vector3.new(0, 0, -1)
     right = right.Magnitude > 0.01 and right.Unit or Vector3.new(1, 0, 0)
+
     local target = aimTarget or utility.target
     local targetChar = target and target.Parent
     local seen = {}
+
     for _, char in ipairs(utility:getPlayers()) do
         if char ~= lpChar and char.Parent then
             local hrp = char:FindFirstChild("HumanoidRootPart")
@@ -2492,46 +3124,169 @@ local function updateRadar()
                     local dot = radarDots[char]
                     if not dot then
                         dot = mk("Frame", radarFrame, {
-                            Size = UDim2.fromOffset(5, 5), AnchorPoint = Vector2.new(0.5, 0.5),
-                            BackgroundColor3 = Color3.fromRGB(255, 70, 70), BorderSizePixel = 0, Visible = false,
+                            Size = UDim2.fromOffset(5, 5),
+                            AnchorPoint = Vector2.new(0.5, 0.5),
+                            BackgroundColor3 = Color3.fromRGB(255, 70, 70),
+                            BorderSizePixel = 0,
+                            Visible = false,
                         })
                         mk("UICorner", dot, { CornerRadius = UDim.new(1, 0) })
                         radarDots[char] = dot
                     end
+
                     local offset = hrp.Position - lpRoot.Position
-                    local point = Vector2.new(offset:Dot(right), -offset:Dot(forward)) * (radius / math.max(RadarState.Range, 1))
-                    if point.Magnitude > radius then point = point.Unit * radius end
+                    local x = offset:Dot(right)
+                    local y = -offset:Dot(forward)
+                    local point = Vector2.new(x, y) * (radius / math.max(RadarState.Range, 1))
+                    if point.Magnitude > radius then
+                        point = point.Unit * radius
+                    end
+
                     dot.Position = UDim2.fromOffset(center.X + point.X, center.Y + point.Y)
-                    if char == targetChar then dot.BackgroundColor3 = Color3.fromRGB(255, 220, 0)
-                    elseif Players:GetPlayerFromCharacter(char) then dot.BackgroundColor3 = Color3.fromRGB(255, 70, 70)
-                    else dot.BackgroundColor3 = Color3.fromRGB(255, 160, 40) end
+                    if char == targetChar then
+                        dot.BackgroundColor3 = Color3.fromRGB(255, 220, 0)
+                    elseif Players:GetPlayerFromCharacter(char) then
+                        dot.BackgroundColor3 = Color3.fromRGB(255, 70, 70)
+                    else
+                        dot.BackgroundColor3 = Color3.fromRGB(255, 160, 40)
+                    end
                     dot.Visible = true
                 end
             end
         end
     end
+
     for char, dot in pairs(radarDots) do
-        if not seen[char] or not char.Parent then dot:Destroy(); radarDots[char] = nil end
+        if not seen[char] or not char.Parent then
+            dot:Destroy()
+            radarDots[char] = nil
+        end
     end
 end
 
-local function radarStep(dt)
-    if Runtime.Unloaded then return end
-    Runtime:Call("radar", updateRadar)
+Runtime:Connect(RunService.Heartbeat, "maintenance", function()
+    if os.clock() - (Runtime.LastChams or 0) >= 0.1 then
+        Runtime.LastChams = os.clock()
+        Runtime:Call("chams", chamsStep)
+    end
+end)
+
+Runtime:Connect(LocalPlayer.CharacterAdded, "respawn", function()
+    lastPlayersScan = -math.huge
+    utility.target, aimTarget, TriggerPress.Target = nil, nil, nil
+end)
+
+cleanup = function()
+    if Runtime.Cleaned then return end
+    Runtime.Cleaned = true
+    Runtime:Stop()
+
+    RadarState.Enabled = false
+    utility.SilentAim = false
+    utility.target = nil
+    AimAssistState.Enabled = false
+    TriggerState.Enabled = false
+    ChamsState.Enabled = false
+    HealthChamsState.Enabled = false
+    LightState.Enabled = false
+    AtmState.Enabled = false
+    FOVState.Enabled = false
+    GunState.Enabled = false
+    ArmsState.Enabled = false
+    ArmsState.Hide = false
+
+    Runtime:Call("release trigger", releaseTrigger)
+    if utility.hooked and utility.fireHitscanShot and utility.firehook then
+        local ok = false
+        if utility.wasHooked ~= true and type(restorefunction) == "function" then
+            ok = Runtime:Call("restore hitscan hook", restorefunction, utility.fireHitscanShot)
+        end
+        if not ok then
+            ok = Runtime:Call("restore hitscan fallback", hookfunction, utility.fireHitscanShot, utility.firehook)
+        end
+        if ok then utility.hooked = false end
+    end
+    utility.hooking = false
+    for i = #Runtime.Cleaners, 1, -1 do Runtime:Call("feature cleanup", Runtime.Cleaners[i]) end
+    table.clear(Runtime.Cleaners)
+
+    Runtime:Call("restore lighting", restoreLighting)
+    Runtime:Call("restore atmosphere", restoreAtmosphere)
+    Runtime:Call("clear pickups", hcClear)
+    Runtime:Call("restore FOV", restoreFOV)
+
+    pcall(function()
+        local parts = {}
+        for part in pairs(Backups) do
+            table.insert(parts, part)
+        end
+        for _, part in ipairs(parts) do
+            Runtime:Call("restore viewmodel part", restorePart, part)
+        end
+    end)
+    pcall(function()
+        for part, bk in pairs(ArmHideBackups) do
+            if part and part.Parent then
+                part.Transparency = bk.Transparency
+                part.LocalTransparencyModifier = bk.Modifier
+            end
+            ArmHideBackups[part] = nil
+        end
+    end)
+    pcall(function() restoreGroup("parts") end)
+    pcall(function() restoreGroup("arms") end)
+
+    pcall(function()
+        for _, ad in pairs(ChamsCache) do
+            ad[1]:Destroy()
+            ad[2]:Destroy()
+        end
+        for part in pairs(ChamsCache) do
+            ChamsCache[part] = nil
+        end
+    end)
+
+    pcall(function() fovGui:Destroy() end)
+    pcall(function() radarGui:Destroy() end)
+
+    table.clear(heldInputs)
+    table.clear(radarDots)
+    if Environment.VergilCleanup == cleanup then Environment.VergilCleanup = nil end
+    if Environment.VergilDebugAPI and Environment.VergilDebugAPI.Runtime == Runtime then
+        Environment.VergilDebugAPI = nil
+    end
+    if Environment.VergilAPI and Environment.VergilAPI.Runtime == Runtime then Environment.VergilAPI = nil end
+    if not Library.Unloaded and type(Runtime.LibraryExit) == "function" then
+        Runtime:Call("UI cleanup", Runtime.LibraryExit, Library)
+    end
 end
 
 local RadarSection = Visuals:Section({ Name = "radar", Side = 1 })
-RadarSection:Toggle({ Name = "enabled", Flag = "radar_enabled", Default = false,
-    Callback = function(v) RadarState.Enabled = v end })
-RadarSection:Toggle({ Name = "team check", Flag = "radar_team", Default = true,
-    Callback = function(v) RadarState.TeamCheck = v end })
-RadarSection:Slider({ Name = "size", Flag = "radar_size", Min = 120, Max = 320, Default = 180, Decimals = 1,
-    Callback = function(v) RadarState.Size = v end })
-RadarSection:Slider({ Name = "range", Flag = "radar_range", Min = 50, Max = 600, Default = 250, Decimals = 1, Suffix = " studs",
-    Callback = function(v) RadarState.Range = v end })
+
+RadarSection:Toggle({
+    Name = "enabled", Flag = "radar_enabled", Default = false,
+    Callback = function(v) RadarState.Enabled = v end,
+})
+
+RadarSection:Toggle({
+    Name = "team check", Flag = "radar_team", Default = true,
+    Callback = function(v) RadarState.TeamCheck = v end,
+})
+
+RadarSection:Slider({
+    Name = "size", Flag = "radar_size",
+    Min = 120, Max = 320, Default = 180, Decimals = 1,
+    Callback = function(v) RadarState.Size = v end,
+})
+
+RadarSection:Slider({
+    Name = "range", Flag = "radar_range",
+    Min = 50, Max = 600, Default = 250, Decimals = 1, Suffix = " studs",
+    Callback = function(v) RadarState.Range = v end,
+})
 
 ----------------------------------------------------------------
--- VISUAL STUDIO
+-- VISUAL STUDIO: animated crosshair, target card, and presets
 ----------------------------------------------------------------
 do
     local page = Window:Page({ Name = "studio" })
@@ -2543,7 +3298,9 @@ do
         holder.DisplayOrder = 10100 + index
     end
 
-    local cross = mk("Frame", gui, { BackgroundTransparency = 1, Size = UDim2.fromOffset(0, 0), Visible = false })
+    local cross = mk("Frame", gui, {
+        BackgroundTransparency = 1, Size = UDim2.fromOffset(0, 0), Visible = false,
+    })
     local segments = {}
     for i = 1, 4 do
         segments[i] = mk("Frame", cross, { BorderSizePixel = 0, Visible = false })
@@ -2551,7 +3308,9 @@ do
     end
     local dot = mk("Frame", cross, { AnchorPoint = Vector2.new(0.5, 0.5), BorderSizePixel = 0 })
     mk("UICorner", dot, { CornerRadius = UDim.new(1, 0) })
-    local ring = mk("Frame", cross, { AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1, Visible = false })
+    local ring = mk("Frame", cross, {
+        AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1, Visible = false,
+    })
     mk("UICorner", ring, { CornerRadius = UDim.new(1, 0) })
     local ringStroke = mk("UIStroke", ring, { Thickness = 2 })
 
@@ -2582,8 +3341,12 @@ do
         Position = UDim2.fromOffset(70, 59), Size = UDim2.fromOffset(198, 7),
         BackgroundColor3 = Color3.fromRGB(40, 42, 55), BorderSizePixel = 0,
     })
-    local healthTrail = mk("Frame", healthBack, { Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.fromRGB(255, 185, 70), BorderSizePixel = 0 })
-    local health = mk("Frame", healthBack, { Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.fromRGB(100, 240, 150), BorderSizePixel = 0 })
+    local healthTrail = mk("Frame", healthBack, {
+        Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.fromRGB(255, 185, 70), BorderSizePixel = 0,
+    })
+    local health = mk("Frame", healthBack, {
+        Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.fromRGB(100, 240, 150), BorderSizePixel = 0,
+    })
     local thumbs, displayTarget, previousCharacter, trailFraction = {}, nil, nil, 1
     local lastTargetScan = -math.huge
 
@@ -2658,6 +3421,7 @@ do
             studio_targethud = true, studio_rainbow = false,
             gun_color = palette.Color, arms_color = palette.Color,
             aim_color = palette.Color, aa_color = palette.Color,
+            theme_Accent = palette.Color,
         }
         for flag, value in pairs(values) do
             local setter = Library.SetFlags[flag]
@@ -2718,10 +3482,10 @@ do
         health.BackgroundColor3 = Color3.fromRGB(255, 80, 100):Lerp(Color3.fromRGB(100, 240, 150), fraction)
         local palette = self.Palettes[self.Palette] or self.Palettes.clean
         cardStroke.Color = self:Color(palette.Color)
-        title.Text = player and (NameProtect.Enabled and npName(player) or player.DisplayName) or char.Name
+        title.Text = player and player.DisplayName or char.Name
         details.Text = string.format("%d / %d HP  |  %d studs", math.ceil(hum.Health), math.ceil(hum.MaxHealth),
             math.floor((displayTarget.Position - cam.CFrame.Position).Magnitude))
-        if player and not NameProtect.Enabled then
+        if player then
             local id = player.UserId
             if thumbs[id] == nil then
                 thumbs[id] = false
@@ -2805,20 +3569,18 @@ do
             TargetingState.Part = parts[1]
             aimTarget, utility.target = nil, nil
         end })
-    targeting:Label({ Name = "Uses the best selected part inside your FOV" })
-    targeting:Label({ Name = "No selected parts = no aim target" })
     Library.SetFlags.target_part = function(value)
         if type(value) == "string" and table.find(TargetPartNames, value) then partDropdown:Set({ value }) end
     end
     local baseLoadConfig = Library.LoadConfig
     Library.LoadConfig = function(self, config)
-        local ok, decoded = pcall(function() return HttpService:JSONDecode(config) end)
+        local ok, decoded = pcall(function() return game:GetService("HttpService"):JSONDecode(config) end)
         if ok and type(decoded) == "table" and decoded.target_parts ~= nil then
             decoded.target_part = nil
-            config = HttpService:JSONEncode(decoded)
+            config = game:GetService("HttpService"):JSONEncode(decoded)
         elseif ok and type(decoded) == "table" and type(decoded.target_part) == "string" then
             decoded.target_parts, decoded.target_part = { decoded.target_part }, nil
-            config = HttpService:JSONEncode(decoded)
+            config = game:GetService("HttpService"):JSONEncode(decoded)
         end
         return baseLoadConfig(self, config)
     end
@@ -2835,7 +3597,9 @@ end
 ----------------------------------------------------------------
 Window:InitWindow()
 
-Runtime:Spawn("initialize", function() utility:init() end)
+Runtime:Spawn("initialize", function()
+    utility:init()
+end)
 
 local function viewmodelStep(vm)
     local cam = getCamera()
@@ -2844,6 +3608,7 @@ local function viewmodelStep(vm)
     local gloveActive = SkinChanger.Gloves:Step(vm)
     if not vm then return end
     if not GunState.Enabled and not ArmsState.Enabled and not ArmsState.Hide and not next(ArmHideBackups) then return end
+
     if Runtime.Viewmodel ~= vm or os.clock() - (Runtime.ViewmodelScan or 0) >= 0.25 then
         Runtime.Viewmodel, Runtime.ViewmodelScan, Runtime.ViewmodelParts = vm, os.clock(), {}
         for _, obj in ipairs(vm:GetDescendants()) do
@@ -2856,12 +3621,22 @@ local function viewmodelStep(vm)
             if group == "arms" then
                 if ArmsState.Hide then
                     local bk = ArmHideBackups[obj]
-                    if not bk then bk = { Transparency = obj.Transparency, Modifier = obj.LocalTransparencyModifier }; ArmHideBackups[obj] = bk end
+                    if not bk then
+                        bk = {
+                            Transparency = obj.Transparency,
+                            Modifier = obj.LocalTransparencyModifier,
+                        }
+                        ArmHideBackups[obj] = bk
+                    end
                     if obj.Transparency < 1 then obj.Transparency = 1 end
                     if obj.LocalTransparencyModifier < 1 then obj.LocalTransparencyModifier = 1 end
                 else
                     local bk = ArmHideBackups[obj]
-                    if bk then obj.Transparency = bk.Transparency; obj.LocalTransparencyModifier = bk.Modifier; ArmHideBackups[obj] = nil end
+                    if bk then
+                        obj.Transparency = bk.Transparency
+                        obj.LocalTransparencyModifier = bk.Modifier
+                        ArmHideBackups[obj] = nil
+                    end
                     if ArmsState.Enabled and not skinActive and not gloveActive then
                         applyStyle(obj, ArmsState.Material, Studio:Color(ArmsState.Color))
                     end
@@ -2876,127 +3651,58 @@ local function viewmodelStep(vm)
 end
 
 Runtime:Bind("VergilViewmodel", Enum.RenderPriority.Last.Value + 1, viewmodelStep)
+
 Runtime:Bind("VergilWorld", Enum.RenderPriority.Camera.Value + 1, function()
     Runtime:Call("FOV lock", enforceFOV)
     if LightState.Enabled then Runtime:Call("lighting", applyLighting) end
     if AtmState.Enabled then Runtime:Call("atmosphere", applyAtmosphere) end
 end)
+
 Runtime:Bind("VergilAim", Enum.RenderPriority.Camera.Value + 2, function(dt)
     utility.target = utility:GetClosestPlayer()
     aimStep(dt)
 end)
 
-Runtime.VisualElapsed = 0
 Runtime:Bind("VergilRings", Enum.RenderPriority.Camera.Value + 4, function()
     Runtime:Call("FOV circles", ringStep)
     Runtime:Call("trigger", triggerStep)
 end)
-Runtime:Bind("VergilRadar", Enum.RenderPriority.Last.Value + 3, radarStep)
-Runtime:Bind("VergilStudio", Enum.RenderPriority.Camera.Value + 6, function(dt) Studio:Step(dt) end)
 
-Runtime:Connect(RunService.Heartbeat, "maintenance", function()
-    if os.clock() - (Runtime.LastMaintenance or 0) >= 0.1 then
-        Runtime.LastMaintenance = os.clock()
-        Runtime:Call("chams", chamsStep)
-    end
-end)
+RunService:UnbindFromRenderStep("VergilDebug")
+Runtime:Bind("VergilRadar", Enum.RenderPriority.Last.Value + 4, updateRadar)
+Runtime:Bind("VergilStudio", Enum.RenderPriority.Last.Value + 6, function(dt) Studio:Step(dt) end)
 
-Runtime:Connect(LocalPlayer.CharacterAdded, "respawn", function()
-    lastPlayersScan = -math.huge
-    utility.target, aimTarget, TriggerPress.Target = nil, nil, nil
-end)
-
-cleanup = function()
-    if Runtime.Cleaned then return end
-    Runtime.Cleaned = true
-    Runtime:Stop()
-    RadarState.Enabled = false
-    utility.SilentAim = false
-    utility.target = nil
-    AimAssistState.Enabled = false
-    TriggerState.Enabled = false
-    ChamsState.Enabled = false
-    HealthChamsState.Enabled = false
-    LightState.Enabled = false
-    AtmState.Enabled = false
-    FOVState.Enabled = false
-    NameProtect.Enabled = false
-    GunState.Enabled = false
-    ArmsState.Enabled = false
-    ArmsState.Hide = false
-    Runtime:Call("release trigger", releaseTrigger)
-    if utility.hooked and utility.fireHitscanShot and utility.firehook then
-        local ok = false
-        if utility.wasHooked ~= true and type(restorefunction) == "function" then
-            ok = Runtime:Call("restore hitscan hook", restorefunction, utility.fireHitscanShot)
-        end
-        if not ok then ok = Runtime:Call("restore hitscan fallback", hookfunction, utility.fireHitscanShot, utility.firehook) end
-        if ok then utility.hooked = false end
-    end
-    utility.hooking = false
-    for i = #Runtime.Cleaners, 1, -1 do Runtime:Call("feature cleanup", Runtime.Cleaners[i]) end
-    table.clear(Runtime.Cleaners)
-    Runtime:Call("restore lighting", restoreLighting)
-    Runtime:Call("restore atmosphere", restoreAtmosphere)
-    Runtime:Call("clear pickups", hcClear)
-    Runtime:Call("restore names", npScan)
-    Runtime:Call("restore FOV", restoreFOV)
-    pcall(function()
-        local parts = {}
-        for part in pairs(Backups) do table.insert(parts, part) end
-        for _, part in ipairs(parts) do Runtime:Call("restore viewmodel part", restorePart, part) end
-    end)
-    pcall(function()
-        for part, bk in pairs(ArmHideBackups) do
-            if part and part.Parent then part.Transparency = bk.Transparency; part.LocalTransparencyModifier = bk.Modifier end
-            ArmHideBackups[part] = nil
-        end
-    end)
-    pcall(function() restoreGroup("parts") end)
-    pcall(function() restoreGroup("arms") end)
-    pcall(function()
-        for _, ad in pairs(ChamsCache) do ad[1]:Destroy(); ad[2]:Destroy() end
-        for part in pairs(ChamsCache) do ChamsCache[part] = nil end
-    end)
-    pcall(function() fovGui:Destroy() end)
-    pcall(function() radarGui:Destroy() end)
-    table.clear(heldInputs)
-    table.clear(radarDots)
-    if Environment.VergilCleanup == cleanup then Environment.VergilCleanup = nil end
-    if Environment.VergilDebugAPI and Environment.VergilDebugAPI.Runtime == Runtime then Environment.VergilDebugAPI = nil end
-    if not Library.Unloaded and type(Runtime.LibraryExit) == "function" then
-        Runtime:Call("UI cleanup", Runtime.LibraryExit, Library)
-    end
+Library.Exit = function()
+    cleanup()
 end
 
-Library.Exit = function() cleanup() end
-
 Environment.VergilCleanup = cleanup
-Environment.VergilDebugAPI = {
-    Cleanup = cleanup,
-    Runtime = Runtime,
-    Radar = RadarState,
-    FOV = FOVState,
-    Lighting = LightState,
-    Atmosphere = AtmState,
-    NameProtect = NameProtect,
-    SkinChanger = SkinChanger,
-    Inventory = LocalInventory,
-    Knife = SkinChanger.Knife,
-    Gloves = SkinChanger.Gloves,
-    WeaponMods = WeaponMods,
-    Studio = Studio,
-    Targeting = TargetingState,
-    Utility = utility,
-    AimAssist = AimAssistState,
-    Trigger = TriggerState,
-    Chams = ChamsState,
-    UpdateRadar = updateRadar,
-    UpdateViewmodel = viewmodelStep,
-    SetFlag = function(flag, value)
-        assert(not Runtime.Unloaded, "Vergil is unloaded")
-        local setter = Library.SetFlags[flag]
-        assert(setter, "Unknown Vergil flag: " .. tostring(flag))
-        setter(value)
-    end,
+Environment.VergilAPI = {
+        Cleanup = cleanup,
+        Window = Window,
+        Runtime = Runtime,
+        Radar = RadarState,
+        FOV = FOVState,
+        Lighting = LightState,
+        Atmosphere = AtmState,
+        SkinChanger = SkinChanger,
+        Inventory = LocalInventory,
+        Agents = LocalInventory.Agents,
+        Knife = SkinChanger.Knife,
+        Gloves = SkinChanger.Gloves,
+        WeaponMods = WeaponMods,
+        Studio = Studio,
+        Targeting = TargetingState,
+        Utility = utility,
+        AimAssist = AimAssistState,
+        Trigger = TriggerState,
+        Chams = ChamsState,
+        UpdateRadar = updateRadar,
+        UpdateViewmodel = viewmodelStep,
+        SetFlag = function(flag, value)
+            assert(not Runtime.Unloaded, "Vergil is unloaded")
+            local setter = Library.SetFlags[flag]
+            assert(setter, "Unknown Vergil flag: " .. tostring(flag))
+            setter(value)
+        end,
 }
