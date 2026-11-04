@@ -1852,7 +1852,7 @@ do
                     if applied == false then error("[Vergil] native gun skin failed: " .. id) end
                     if assetType == "model" then
                         if resolved.hasArms and self.NativeSwapArms then
-                            self.NativeSwapArms(result.gunModel, resolved.characterName, resolved.gloveType)
+                            self.NativeSwapArms(result.gunModel, result.viewmodel, resolved.characterName, resolved.gloveType)
                         end
                         if gloveOverride and self.Gloves.Applier then
                             self.Gloves.Applier.applyTo(result.gunModel, resolved.gloveType, resolved.gloveVariant, { staticEmissive = true })
