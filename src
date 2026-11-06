@@ -2801,7 +2801,10 @@ end
 ----------------------------------------------------------------
 local WeaponMods: any = {
     NoRecoil = false, NoSpread = false, Shotguns = false, FastReload = false, NoBlastCooldown = false,
+    RapidFire = false, RateMultiplier = 3,
     Configs = {}, SpreadBackups = {}, DirectionHooks = {}, DirectionFunctions = {}, Status = "loading",
+    RateBackups = setmetatable({}, { __mode = "k" }),
+    BoltOwners  = setmetatable({}, { __mode = "k" }),
 }
 
 do
@@ -2960,6 +2963,114 @@ do
         self.GCScanned = true
     end
 
+    ------------------------------------------------------------------
+    -- RAPID FIRE
+    ------------------------------------------------------------------
+    function WeaponMods:IsLocal(controller)
+        return type(controller) == "table" and controller.player == LocalPlayer and not controller.destroyed
+    end
+
+    function WeaponMods:Observe(controller)
+        if not self:IsLocal(controller) then return end
+        if controller.viewmodel then SkinChanger.LiveControllers[controller.viewmodel] = controller end
+        if controller.boltAnimator then self.BoltOwners[controller.boltAnimator] = controller end
+        if controller.equipped then self.Controller = controller end
+    end
+
+    function WeaponMods:GetController()
+        local camera = getCamera()
+        local vm = camera and camera:FindFirstChild("Viewmodel")
+        if not vm then return nil end
+        local controller = SkinChanger.LiveControllers[vm] or self.Controller
+        if self:IsLocal(controller) and controller.equipped and controller.viewmodel == vm then return controller end
+        if type(getgc) == "function" and os.clock() - (self.LastDiscover or -math.huge) >= 1 then
+            self.LastDiscover = os.clock()
+            for _, value in pairs(getgc(true)) do
+                if type(value) == "table" and rawget(value, "player") == LocalPlayer and rawget(value, "viewmodel") == vm
+                    and not rawget(value, "destroyed") and type(value.shoot) == "function" then
+                    self:Observe(value)
+                    return value.equipped and value or nil
+                end
+            end
+        end
+        return nil
+    end
+
+    function WeaponMods:RestoreRate(controller)
+        local record = self.RateBackups[controller]
+        if not record then return end
+        if controller.currentGunModule == record.Applied then controller.currentGunModule = record.Original end
+        self.RateBackups[controller] = nil
+    end
+
+    function WeaponMods:ApplyRate(controller)
+        if not self:IsLocal(controller) then return end
+        if not self.RapidFire then self:RestoreRate(controller); return end
+        local gun = controller.currentGunModule
+        if type(gun) ~= "table" or (gun.gunType ~= "HITSCAN" and gun.gunType ~= "BEAM") then
+            self:RestoreRate(controller); return
+        end
+        local record = self.RateBackups[controller]
+        if record and gun ~= record.Applied then self.RateBackups[controller] = nil; record = nil end
+        if not record then
+            record = { Original = gun, Applied = table.clone(gun) }
+            self.RateBackups[controller] = record
+            controller.currentGunModule = record.Applied
+        end
+        for key, value in pairs(record.Original) do
+            if key ~= "rpm" and key ~= "burstDelay" and key ~= "bolt" then record.Applied[key] = value end
+        end
+        local multiplier = math.clamp(tonumber(self.RateMultiplier) or 3, 1, 8)
+        -- STRAFE calls this "rpm" but it is actually seconds between shots.
+        record.Applied.rpm = math.max(0.02, (tonumber(record.Original.rpm) or 0.1) / multiplier)
+        if type(record.Original.burstDelay) == "number" then
+            record.Applied.burstDelay = math.max(0.02, record.Original.burstDelay / multiplier)
+        end
+        if type(record.Original.bolt) == "table" then
+            record.Applied.bolt = table.clone(record.Original.bolt)
+            record.Applied.bolt.speed = (tonumber(record.Original.bolt.speed) or 1) * multiplier
+        end
+    end
+
+    function WeaponMods:Maintain(controller)
+        if not self:IsLocal(controller) then return end
+        self:Observe(controller)
+        self:ApplyRate(controller)
+    end
+
+    if type(WeaponMods.Handler.update) == "function" then
+        Runtime:Hook("local weapon maintenance", WeaponMods.Handler.update,
+            function(original, controller, ...)
+                WeaponMods:Maintain(controller)
+                return original(controller, ...)
+            end)
+    end
+    if type(WeaponMods.Handler.shoot) == "function" then
+        Runtime:Hook("local shoot timing", WeaponMods.Handler.shoot,
+            function(original, controller, gun, ...)
+                WeaponMods:Maintain(controller)
+                if WeaponMods.RapidFire and WeaponMods:IsLocal(controller) then
+                    gun = controller.currentGunModule or gun
+                end
+                return original(controller, gun, ...)
+            end)
+    end
+
+    -- Bypass the bolt/pump animation gate so the native fire loop is not throttled.
+    local animationFolder = classes and classes:FindFirstChild("Animation")
+    local boltModule = animationFolder and animationFolder:FindFirstChild("BoltAnimator")
+    if boltModule then
+        local okBolt, bolt = Runtime:NativeCall("bolt animator", require, boltModule)
+        if okBolt and type(bolt) == "table" and type(bolt.isPlaying) == "function" then
+            Runtime:Hook("rapid fire bolt gate", bolt.isPlaying,
+                function(original, animator, ...)
+                    local owner = WeaponMods.BoltOwners[animator]
+                    if WeaponMods.RapidFire and WeaponMods:IsLocal(owner) then return false end
+                    return original(animator, ...)
+                end)
+        end
+    end
+
     WeaponMods.Status = string.format("recoil controllers: %d | bloom: %s", recoilHooks, WeaponMods.BloomHook and "ready" or "unavailable")
     status:SetText(WeaponMods.Status)
     section:Toggle({ Name = "no recoil", Flag = "weapon_no_recoil", Default = false,
@@ -2981,6 +3092,23 @@ do
                 for _, controller in pairs(SkinChanger.LiveControllers) do WeaponMods:ClearBlastCooldown(controller) end
             end
         end })
+    section:Toggle({ Name = "rapid fire", Flag = "weapon_rapid_fire", Default = false,
+        Callback = function(value)
+            WeaponMods.RapidFire = value
+            if not value then
+                for controller in pairs(WeaponMods.RateBackups) do WeaponMods:RestoreRate(controller) end
+            else
+                local controller = WeaponMods:GetController()
+                if controller then WeaponMods:Maintain(controller) end
+            end
+        end })
+    section:Slider({ Name = "fire rate multiplier", Flag = "weapon_fire_multiplier",
+        Min = 1, Max = 8, Default = 3, Decimals = 0.5,
+        Callback = function(value)
+            WeaponMods.RateMultiplier = value
+            local controller = WeaponMods:GetController()
+            if controller then WeaponMods:ApplyRate(controller) end
+        end })
 
     Runtime:Spawn("spread helper discovery", function()
         while not Runtime.Unloaded do
@@ -2996,6 +3124,8 @@ do
     end)
     table.insert(Runtime.Cleaners, function()
         WeaponMods.NoRecoil, WeaponMods.NoSpread, WeaponMods.FastReload, WeaponMods.NoBlastCooldown = false, false, false, false
+        WeaponMods.RapidFire = false
+        for controller in pairs(WeaponMods.RateBackups) do WeaponMods:RestoreRate(controller) end
         WeaponMods:UpdateSpread()
     end)
 end
